@@ -1,0 +1,25 @@
+appId: com.mysqlmcp.bridge
+productName: MySQL MCP Bridge
+artifactName: "MySQL-MCP-Bridge-${version}-${arch}.${ext}"
+directories:
+  output: release
+files:
+  - dist/**/*
+  - electron/**/*
+  - server/**/*
+  - package.json
+asar: true
+npmRebuild: true
+win:
+  icon: assets/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+  publisherName: null
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: MySQL MCP Bridge

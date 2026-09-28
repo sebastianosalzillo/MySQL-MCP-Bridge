@@ -1,0 +1,66 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+out/
+release/
+.vite/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Local app state and exports
+config.json
+settings.json
+connections.json
+*.local.json
+*.backup.json
+
+# ngrok secrets/config
+ngrok.yml
+.ngrok2/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Electron / installers
+*.asar
+*.exe
+*.msi
+*.dmg
+*.AppImage
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary
+tmp/
+temp/
+*.tmp
+
+# Certificates / private keys
+*.pem
+*.key
+*.crt
+*.pfx
+*.p12
+
+# Local database files
+*.db
+*.sqlite
+*.sqlite3
