@@ -1,41 +1,104 @@
 # MySQL MCP Bridge
 
-Applicazione desktop Windows che collega un server **MySQL** a client compatibili con **MCP (Model Context Protocol)**. Il bridge espone un endpoint MCP Streamable HTTP locale e, opzionalmente, lo pubblica tramite **ngrok**.
+Windows desktop application that connects a **MySQL** server to **MCP (Model Context Protocol)** clients. The bridge exposes a local MCP Streamable HTTP endpoint and, optionally, publishes it through **ngrok**.
 
-> Stato: versione iniziale `0.1.0`. Prima di usarla su database di produzione, testala su una copia e crea un utente MySQL con privilegi minimi.
+> Status: `0.1.0`. Supports MySQL 5.6 through 9.x. Before using it against a production database, test on a copy and create a MySQL user with the minimum privileges required.
+>
+> The previous Italian version of this document is kept in [README.it.md](./README.it.md).
 
-## Cosa fa
+## What it does
 
-- Connessione a server MySQL configurabili tramite host/IP, porta, database, utente e password.
-- Endpoint MCP locale `http://127.0.0.1:3001/mcp` (porta configurabile).
-- Tunnel HTTPS opzionale tramite ngrok con Authtoken e dominio assegnato/fisso.
-- Modalità `READ ONLY`, `READ + WRITE`, `ADMIN`.
-- Whitelist opzionale delle tabelle visibili ai tool.
-- Limite massimo SELECT, timeout query, blocco multi-statement.
-- Blocco predefinito di UPDATE/DELETE senza WHERE.
-- Approvazioni one-shot dall’interfaccia per UPDATE, DELETE e DDL.
-- Console SQL locale.
-- Password MySQL, Authtoken ngrok e bearer token MCP memorizzati usando `Electron safeStorage` (DPAPI su Windows quando disponibile).
-- Log delle chiamate MCP e delle query, senza scrivere segreti nei log.
+- Connects to any MySQL server, including MySQL-compatible forks, over TCP, a Windows named pipe, or a Unix socket.
+- Local MCP endpoint at `http://127.0.0.1:3001/mcp` (port configurable).
+- Optional HTTPS tunnel through ngrok, with authtoken and a fixed domain.
+- `READ ONLY`, `READ + WRITE` and `ADMIN` modes.
+- Optional whitelist of the tables visible to the tools.
+- Maximum SELECT limit, query timeout, multi-statement blocking.
+- UPDATE/DELETE without WHERE blocked by default.
+- One-shot approvals from the UI for UPDATE, DELETE and DDL.
+- Local SQL console.
+- MySQL password, ngrok authtoken and MCP bearer token stored with Electron `safeStorage` (DPAPI on Windows when available).
+- Logs of MCP calls and queries, without writing secrets into the log.
 
-## Tool MCP inclusi
+## MySQL version compatibility
 
-### Lettura
+Version detection runs once at connection time and drives the behaviour of every tool. The detected version, its capabilities and any limitations are returned by the `mysql_server_info` tool, shown in the app after **Test connection**, and written to the log at startup.
 
-- `mysql_server_info`
+| Feature | Minimum version | Behaviour on older servers |
+| --- | --- | --- |
+| Connection and introspection | 5.6 | supported baseline |
+| `DATETIME DEFAULT` / `ON UPDATE CURRENT_TIMESTAMP` | 5.6.5 | rejected by `create_table` with an explicit message |
+| `JSON` column type | 5.7.8 | rejected by `create_table`, use `LONGTEXT` instead |
+| InnoDB index keys of 3072 bytes | 5.7.7 | 767 byte limit; `create_index` computes a prefix length automatically |
+| `utf8mb4_0900_ai_ci` collation | 8.0 | the connection retries with `utf8mb4_general_ci` |
+| Common table expressions (`WITH`) | 8.0 | the syntax is rejected by the server |
+| Expression column defaults | 8.0.13 | only literal defaults are accepted |
+| `ALGORITHM=INSTANT` for `ADD COLUMN` | 8.0.12 | `INPLACE` and `COPY` remain available from 5.6 |
+| Enforced `CHECK` constraints | 8.0.16 | constraints are parsed and ignored |
+| `utf8` treated as `utf8mb3` | 8.0.28 | no deprecation warning |
+
+The following servers are recognised explicitly, including the awkward version strings they report:
+
+- `5.7.44-log`, `8.0.32-0ubuntu0.20.04.2`, `5.7.44-48` (Percona)
+- `5.5.5-10.6.18-MariaDB`, the replication compatibility prefix used by MariaDB
+- `8.0.mysql_aurora.3.04.0` (Amazon Aurora)
+
+Compatibility gates live in `server/mysqlVersion.mjs`, version parsing in `server/mysqlVersion.mjs`, and the connection layer in `server/mysqlManager.mjs`.
+
+### TLS on older servers
+
+MySQL 5.6 boxes usually present a self-signed certificate. A bare `ssl: {}` fails against them, because the driver defaults to `rejectUnauthorized: true`, so TLS is configured explicitly:
+
+| Mode | Behaviour |
+| --- | --- |
+| `off` | plaintext |
+| `required` | encrypted, certificate not verified. The practical default for a self-signed 5.6 server |
+| `verify-ca` | certificate chain verified against your CA file |
+| `verify-full` | chain and hostname verified |
+
+Pre-2019 servers may also need `minTlsVersion = TLSv1` and `ciphers = DEFAULT@SECLEVEL=0`, both available in the **Advanced** section.
+
+When **Retry with weaker TLS settings** is enabled, the bridge tries, in order: your settings, an unverified certificate, TLSv1 with legacy ciphers, then no TLS. Every attempt is logged, so a downgraded connection is never silent. Disable the option to fail instead of downgrading.
+
+## Connection settings
+
+| Setting | Purpose |
+| --- | --- |
+| Host / Port | TCP endpoint |
+| Socket path | Windows named pipe such as `\\.\pipe\mysql`, or a Unix socket. Takes precedence over host and port |
+| Connection collation | `utf8mb4` is the portable default. `utf8mb4_0900_ai_ci` requires MySQL 8.0+ |
+| TLS mode | see above |
+| CA / certificate / key files | for TLS and mutual TLS |
+| Minimum TLS version | `TLSv1` for legacy servers |
+| TLS ciphers | `DEFAULT@SECLEVEL=0` for legacy servers |
+| Authentication plugin | leave on automatic unless the handshake fails |
+| Server public key | skips the RSA round-trip; works with hosts that block key retrieval |
+| Session time zone | a UTC offset such as `+00:00`, which avoids any dependency on the `mysql.time_zone*` tables |
+| Session SQL mode | empty keeps the server default |
+| `group_concat_max_len` | the server default of 1024 silently truncates aggregated text |
+
+The client pins `timezone` to UTC and reads `DATE` and `DATETIME` as strings, so temporal values are not shifted by the difference between the server's zone and yours.
+
+## MCP tools included
+
+### Reading
+
+- `mysql_server_info` — version, SQL mode, capabilities, compatibility warnings
 - `list_databases`
 - `list_tables`
 - `describe_table`
+- `show_create_table` — the exact DDL the server reports
 - `get_foreign_keys`
 - `select_rows`
+- `explain_query` — execution plan without running the statement
 
-### Scrittura
+### Writing
 
 - `insert_rows`
 - `update_rows`
 - `delete_rows`
 
-### Amministrazione
+### Administration
 
 - `create_database`
 - `drop_database`
@@ -48,77 +111,93 @@ Applicazione desktop Windows che collega un server **MySQL** a client compatibil
 - `drop_index`
 - `execute_sql`
 
-`execute_sql` rispetta sempre il livello di accesso. Le istruzioni amministrative richiedono modalità ADMIN e l’opzione **Abilita SQL amministrativo libero**.
+`execute_sql` always respects the access level. Administrative statements require ADMIN mode plus the **Enable free administrative SQL** option.
 
-## Architettura
+### Filtering
+
+`where` in `select_rows`, `update_rows` and `delete_rows` accepts plain values, arrays for `IN`, or a single operator. Every value is bound as a parameter and never interpolated:
+
+| Input | Produces |
+| --- | --- |
+| `{ id: 3 }` | `` `id` = ? `` |
+| `{ tags: ['a', 'b'] }` | `` `tags` IN (?, ?) `` |
+| `{ age: { $gte: 18 } }` | `` `age` >= ? `` |
+| `{ name: { $like: 'a%' } }` | `` `name` LIKE ? `` |
+| `{ r: { $between: [1, 5] } }` | `` `r` BETWEEN ? AND ? `` |
+| `{ deleted: null }` | `` `deleted` IS NULL `` |
+| `{ deleted: { $isNotNull: true } }` | `` `deleted` IS NOT NULL `` |
+
+Operators are `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$like`, `$notLike`, `$in`, `$between`, `$isNull`, `$isNotNull`.
+
+## Architecture
 
 ```text
-ChatGPT / Claude / client MCP
+ChatGPT / Claude / MCP client
               |
               | HTTPS
               v
-        ngrok (opzionale)
+        ngrok (optional)
               |
               v
   http://127.0.0.1:3001/mcp
               |
        MCP Streamable HTTP
               |
-        guardrail/approval
+   version detection + guardrails
               |
               v
             mysql2
               |
               v
-          MySQL Server
+        MySQL Server
 ```
 
-Il server MySQL **non viene esposto direttamente su Internet**. ngrok inoltra solo il server HTTP MCP locale.
+The MySQL server is **never exposed to the internet**. ngrok only forwards the local MCP HTTP server.
 
-## Requisiti di sviluppo
+## Development requirements
 
 - Windows 10/11 x64
-- Node.js 22 consigliato
+- Node.js 22 or newer recommended
 - npm
-- Account ngrok se vuoi l’endpoint pubblico
+- An ngrok account if you want the public endpoint
 
-## Avvio in sviluppo
+## Running in development
 
 ```powershell
 npm install
 npm run dev
 ```
 
-## Creazione installer Windows
+## Building the Windows installer
 
-Da PowerShell:
+From PowerShell:
 
 ```powershell
 .\build.ps1
 ```
 
-oppure:
+or:
 
 ```powershell
 npm install
 npm run dist:win
 ```
 
-L’installer viene creato in `release/`.
+The installer is produced in `release/`.
 
-## Prima configurazione
+## First run
 
-1. Inserisci host/IP, porta, database, utente e password MySQL.
-2. Premi **Test connessione**.
-3. Scegli la modalità MCP.
-4. Inserisci l’Authtoken ngrok.
-5. Il dominio ngrok è opzionale: se il tuo account ha un Development Domain assegnato puoi indicarlo per forzare quell’URL.
-6. Premi **Avvia MCP**.
-7. Copia l’URL pubblico, ad esempio `https://example.ngrok-free.app/mcp`, e configuralo nel client MCP.
+1. Enter the MySQL host/IP, port, database, user and password. Leave host and port alone if the server listens on a named pipe or socket.
+2. Press **Test connection**. The detected version and its capabilities appear in the panel below.
+3. Choose the MCP access mode.
+4. Enter the ngrok authtoken.
+5. The ngrok domain is optional. If your account has a development domain, set it to force that URL.
+6. Press **Start MCP**.
+7. Copy the public URL, for example `https://example.ngrok-free.app/mcp`, and configure it in your MCP client.
 
-## Approvazioni
+## Approvals
 
-Quando un client MCP prova un’operazione configurata come sensibile, il tool risponde con:
+When an MCP client attempts a sensitive operation, the tool replies with:
 
 ```json
 {
@@ -128,55 +207,84 @@ Quando un client MCP prova un’operazione configurata come sensibile, il tool r
 }
 ```
 
-L’utente approva nell’app desktop. Il client deve quindi ripetere la stessa chiamata passando `approval_id`. L’approvazione è utilizzabile una sola volta e scade dopo 5 minuti.
+The user approves it in the desktop app. The client then repeats the same call passing `approval_id`. Each approval is single use and expires after 5 minutes.
 
-## Sicurezza
+## Security
 
-Consigli:
+Recommendations:
 
-- usa un utente MySQL dedicato;
-- evita `GRANT ALL` se non serve;
-- usa READ ONLY per analisi e reportistica;
-- usa una whitelist delle tabelle per database sensibili;
-- abilita ADMIN solo quando devi modificare lo schema;
-- non disabilitare il requisito WHERE su database reali;
-- non pubblicare `.env`, file di configurazione o token;
-- se il client MCP supporta header `Authorization`, configura anche il bearer token.
+- use a dedicated MySQL user;
+- avoid `GRANT ALL` unless it is genuinely needed;
+- use READ ONLY for analysis and reporting;
+- use the table whitelist for sensitive databases;
+- enable ADMIN only when you need to change the schema;
+- do not disable the WHERE requirement on real databases;
+- do not commit `.env`, configuration files or tokens;
+- if the MCP client supports an `Authorization` header, set the bearer token as well.
 
-### Nota sul bearer token
+### What the guardrails block
 
-Non tutti i client MCP consentono di configurare un header Bearer arbitrario. Per questo è opzionale. Per una distribuzione pubblica/multiutente, aggiungi un flusso OAuth conforme alle richieste del client MCP invece di usare un endpoint anonimo.
+- multi-statement SQL;
+- `INTO OUTFILE`, `INTO DUMPFILE` and `LOAD_FILE()`;
+- `SLEEP()` and `BENCHMARK()`, unless explicitly allowed;
+- `DELETE` or DDL hidden behind a leading `WITH`, such as `WITH c AS (SELECT 1) DELETE FROM t`. MySQL 8 accepts this syntax, so the statement that actually runs is detected rather than the `WITH` keyword;
+- `CALL` and `DO`, which can execute arbitrary procedure and function code, and are therefore treated as ADMIN.
+
+### MCP transport
+
+The endpoint is bound to `127.0.0.1` and the `Host` and `Origin` headers are pinned to the local interface plus the live ngrok host, which blocks DNS rebinding. Responses use `application/json` by default, which is what most remote MCP clients expect; the SSE stream remains available by turning off **Answer with application/json**.
+
+### Note on the bearer token
+
+Not every MCP client can be configured with an arbitrary Bearer header, which is why it is optional. For a public or multi-user deployment, add an OAuth flow matching the client's requirements instead of exposing an anonymous endpoint.
+
+## Tests
+
+```powershell
+npm test          # unit tests: classification, guards, version parsing, capability gates
+npm run lint
+npm run build:renderer
+npm run check     # all three
+```
+
+### Cross-version matrix
+
+`tests/compat.matrix.mjs` boots one container per MySQL generation, detects the version through the real connection layer and drives the real tool handlers against each server, then prints a version by capability matrix.
+
+```powershell
+npm run test:matrix                       # all targets
+npm run test:matrix -- 5.6 8.0            # only matching targets
+npm run test:matrix -- --allow-skip       # exit 0 when Docker is unavailable
+```
+
+It requires Docker, and the MySQL 5.6 images are amd64 only. It is kept out of `npm run check` because of that.
 
 ## GitHub
 
-Il progetto include `.gitignore` per escludere:
+The project includes a `.gitignore` that excludes:
 
 - `node_modules`
-- installer e build
+- installers and build output
 - `.env`
-- configurazioni locali
-- token ngrok
-- log
-- certificati/chiavi
-- database locali
+- local configuration
+- ngrok tokens
+- logs
+- certificates and keys
+- local databases
 
-È incluso anche `.github/workflows/windows-release.yml`. Creando un tag, ad esempio:
+`.github/workflows/windows-release.yml` is also included. Creating a tag, for example:
 
 ```powershell
 git tag v0.1.0
 git push origin v0.1.0
 ```
 
-GitHub Actions prova a creare l’installer Windows e ad allegarlo alla Release.
-
-## Compatibilità MySQL
-
-La connessione usa `mysql2`. Server MySQL molto vecchi possono richiedere impostazioni TLS/auth particolari. Il bridge evita sintassi SQL moderna nelle query di introspezione di base, ma la compatibilità effettiva dipende dai privilegi e dalla configurazione del server.
+makes GitHub Actions attempt to build the Windows installer and attach it to the release.
 
 ## MCP
 
-Il bridge usa Streamable HTTP, trasporto consigliato per server MCP remoti. L’endpoint è `/mcp` e accetta richieste POST MCP.
+The bridge uses Streamable HTTP, the recommended transport for remote MCP servers. The endpoint is `/mcp` and accepts MCP POST requests.
 
-## Licenza
+## License
 
 MIT.

@@ -14,7 +14,24 @@ const defaultSettings = {
     database: '',
     user: '',
     password: '',
-    ssl: false,
+    // Local Windows services often listen on a named pipe instead of TCP.
+    socketPath: '',
+    // utf8mb4 (utf8mb4_general_ci) is the widest collation that exists on every
+    // supported server. utf8mb4_0900_ai_ci is rejected by MySQL before 8.0.
+    collation: 'utf8mb4',
+    // off | required | verify-ca | verify-full
+    tlsMode: 'off',
+    caFile: '',
+    certFile: '',
+    keyFile: '',
+    minTlsVersion: '',
+    ciphers: '',
+    serverPublicKey: '',
+    authPlugin: 'auto',
+    allowTlsFallback: true,
+    sessionTimeZone: '+00:00',
+    sqlMode: '',
+    groupConcatMaxLen: 0,
     connectTimeoutMs: 10000
   },
   mcp: {
@@ -24,11 +41,16 @@ const defaultSettings = {
     selectLimit: 1000,
     queryTimeoutMs: 30000,
     blockMultipleStatements: true,
+    blockFileAccess: true,
+    allowSlowFunctions: false,
     requireWhereForUpdateDelete: true,
     confirmUpdate: true,
     confirmDelete: true,
     confirmDdl: true,
     enableExecuteSql: false,
+    jsonResponses: true,
+    allowedHosts: [],
+    allowedOrigins: [],
     bearerToken: ''
   },
   ngrok: {
@@ -142,7 +164,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', async (event) => {
   if (bridgeController) {
     event.preventDefault();
-    try { await bridgeController.stop(); } catch {}
+    try { await bridgeController.stop(); } catch { /* stopping on the way out anyway */ }
     bridgeController = null;
     app.exit(0);
   }

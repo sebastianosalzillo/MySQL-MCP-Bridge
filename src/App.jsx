@@ -1,10 +1,53 @@
 import { useEffect, useMemo, useState } from 'react';
 
 const empty = {
-  mysql: { host: '127.0.0.1', port: 3306, database: '', user: '', password: '', ssl: false, connectTimeoutMs: 10000 },
-  mcp: { port: 3001, accessMode: 'read', allowedTables: [], selectLimit: 1000, queryTimeoutMs: 30000, blockMultipleStatements: true, requireWhereForUpdateDelete: true, confirmUpdate: true, confirmDelete: true, confirmDdl: true, enableExecuteSql: false, bearerToken: '' },
+  mysql: {
+    host: '127.0.0.1', port: 3306, database: '', user: '', password: '',
+    socketPath: '', collation: 'utf8mb4', tlsMode: 'off',
+    caFile: '', certFile: '', keyFile: '', minTlsVersion: '', ciphers: '',
+    serverPublicKey: '', authPlugin: 'auto', allowTlsFallback: true,
+    sessionTimeZone: '+00:00', sqlMode: '', groupConcatMaxLen: 0,
+    connectTimeoutMs: 10000
+  },
+  mcp: {
+    port: 3001, accessMode: 'read', allowedTables: [], selectLimit: 1000,
+    queryTimeoutMs: 30000, blockMultipleStatements: true, blockFileAccess: true,
+    allowSlowFunctions: false, requireWhereForUpdateDelete: true,
+    confirmUpdate: true, confirmDelete: true, confirmDdl: true,
+    enableExecuteSql: false, jsonResponses: true, allowedHosts: [],
+    allowedOrigins: [], bearerToken: ''
+  },
   ngrok: { enabled: true, authtoken: '', domain: '' }
 };
+
+const COLLATIONS = [
+  ['utf8mb4', 'utf8mb4 (works on every supported server)'],
+  ['utf8mb4-unicode', 'utf8mb4_0900_ai_ci (MySQL 8.0+ only)'],
+  ['utf8mb4-bin', 'utf8mb4_bin'],
+  ['utf8', 'utf8 / utf8mb3'],
+  ['latin1', 'latin1'],
+  ['utf16', 'utf16'],
+  ['utf32', 'utf32'],
+  ['binary', 'binary'],
+  ['server-default', 'Server default']
+];
+
+const TLS_MODES = [
+  ['off', 'Off (plaintext)'],
+  ['required', 'Required, certificate not verified'],
+  ['verify-ca', 'Verify the certificate chain'],
+  ['verify-full', 'Verify chain and hostname']
+];
+
+const TLS_VERSIONS = [['', 'Node default'], ['TLSv1', 'TLSv1 (pre-2019 servers only)'], ['TLSv1.1', 'TLSv1.1'], ['TLSv1.2', 'TLSv1.2'], ['TLSv1.3', 'TLSv1.3']];
+
+const AUTH_PLUGINS = [
+  ['auto', 'Automatic (server decides)'],
+  ['mysql_native_password', 'mysql_native_password'],
+  ['caching_sha2_password', 'caching_sha2_password (MySQL 8 default)'],
+  ['sha256_password', 'sha256_password'],
+  ['mysql_clear_password', 'mysql_clear_password']
+];
 
 const api = window.bridgeAPI;
 
@@ -12,6 +55,7 @@ export default function App() {
   const [settings, setSettings] = useState(empty);
   const [tab, setTab] = useState('connection');
   const [status, setStatus] = useState({ running: false });
+  const [probe, setProbe] = useState(null);
   const [logs, setLogs] = useState([]);
   const [approvals, setApprovals] = useState([]);
   const [notice, setNotice] = useState('');
@@ -37,30 +81,31 @@ export default function App() {
 
   async function save() {
     setBusy(true); setNotice('');
-    try { const saved = await api.saveSettings(settings); setSettings(saved); setNotice('Impostazioni salvate.'); }
-    catch (e) { setNotice(`Errore: ${e.message}`); }
+    try { const saved = await api.saveSettings(settings); setSettings(saved); setNotice('Settings saved.'); }
+    catch (e) { setNotice(`Error: ${e.message}`); }
     finally { setBusy(false); }
   }
 
   async function test() {
-    setBusy(true); setNotice('');
+    setBusy(true); setNotice(''); setProbe(null);
     try {
       const r = await api.testMySql(settings);
-      setNotice(`Connessione OK — MySQL ${r.version} — tabelle: ${r.tableCount}`);
-    } catch (e) { setNotice(`Connessione fallita: ${e.message}`); }
+      setProbe(r);
+      setNotice(`Connected — ${r.versionLabel} — tables: ${r.tableCount}`);
+    } catch (e) { setNotice(`Connection failed: ${e.message}`); }
     finally { setBusy(false); }
   }
 
   async function start() {
     setBusy(true); setNotice('');
-    try { await api.saveSettings(settings); const s = await api.startBridge(); setStatus(s); setNotice('Bridge avviato.'); }
-    catch (e) { setNotice(`Avvio fallito: ${e.message}`); }
+    try { await api.saveSettings(settings); const s = await api.startBridge(); setStatus(s); setNotice('Bridge started.'); }
+    catch (e) { setNotice(`Startup failed: ${e.message}`); }
     finally { setBusy(false); }
   }
 
   async function stop() {
     setBusy(true);
-    try { setStatus(await api.stopBridge()); setNotice('Bridge arrestato.'); }
+    try { setStatus(await api.stopBridge()); setNotice('Bridge stopped.'); }
     finally { setBusy(false); }
   }
 
@@ -77,113 +122,226 @@ export default function App() {
   }
 
   const whitelistText = useMemo(() => (settings.mcp.allowedTables || []).join(', '), [settings.mcp.allowedTables]);
+  const hostsText = useMemo(() => (settings.mcp.allowedHosts || []).join(', '), [settings.mcp.allowedHosts]);
+  const originsText = useMemo(() => (settings.mcp.allowedOrigins || []).join(', '), [settings.mcp.allowedOrigins]);
+  const pending = approvals.filter(a => a.status === 'pending').length;
+  const capabilities = probe?.capabilities || status.capabilities;
+  const warnings = probe ? compatibilityFrom(probe) : (status.compatibilityWarnings || []);
+  const tlsOn = settings.mysql.tlsMode !== 'off';
 
   return <div className="app">
     <header>
       <div>
         <h1>MySQL MCP Bridge</h1>
-        <p>Collega un server MySQL a client MCP tramite endpoint locale e ngrok.</p>
+        <p>Expose a MySQL server to MCP clients through a local endpoint and an optional ngrok tunnel.</p>
       </div>
       <div className={`badge ${status.running ? 'online' : ''}`}>{status.running ? 'ONLINE' : 'OFFLINE'}</div>
     </header>
 
     <nav>
       {[
-        ['connection','Connessione'], ['mcp','MCP + ngrok'], ['security','Sicurezza'], ['console','SQL Console'], ['approvals','Approvazioni'], ['logs','Log']
-      ].map(([id,label]) => <button key={id} className={tab===id?'active':''} onClick={()=>setTab(id)}>{label}{id==='approvals' && approvals.filter(a=>a.status==='pending').length ? ` (${approvals.filter(a=>a.status==='pending').length})` : ''}</button>)}
+        ['connection', 'Connection'], ['mcp', 'MCP + ngrok'], ['security', 'Security'], ['console', 'SQL Console'], ['approvals', 'Approvals'], ['logs', 'Logs']
+      ].map(([id, label]) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>
+        {label}{id === 'approvals' && pending ? ` (${pending})` : ''}
+      </button>)}
     </nav>
 
     {notice && <div className="notice">{notice}</div>}
 
     <main>
       {tab === 'connection' && <section className="panel">
-        <h2>Server MySQL</h2>
+        <h2>MySQL server</h2>
         <div className="grid two">
-          <Field label="Host / IP"><input value={settings.mysql.host} onChange={e=>set('mysql','host',e.target.value)} /></Field>
-          <Field label="Porta"><input type="number" value={settings.mysql.port} onChange={e=>set('mysql','port',Number(e.target.value))} /></Field>
-          <Field label="Database predefinito"><input value={settings.mysql.database} onChange={e=>set('mysql','database',e.target.value)} placeholder="opzionale" /></Field>
-          <Field label="Utente"><input value={settings.mysql.user} onChange={e=>set('mysql','user',e.target.value)} /></Field>
-          <Field label="Password"><input type="password" value={settings.mysql.password} onChange={e=>set('mysql','password',e.target.value)} /></Field>
-          <Field label="Timeout connessione (ms)"><input type="number" value={settings.mysql.connectTimeoutMs} onChange={e=>set('mysql','connectTimeoutMs',Number(e.target.value))} /></Field>
+          <Field label="Host / IP"><input value={settings.mysql.host} onChange={e => set('mysql', 'host', e.target.value)} /></Field>
+          <Field label="Port"><input type="number" value={settings.mysql.port} onChange={e => set('mysql', 'port', Number(e.target.value))} /></Field>
+          <Field label="Default database"><input value={settings.mysql.database} onChange={e => set('mysql', 'database', e.target.value)} placeholder="optional" /></Field>
+          <Field label="User"><input value={settings.mysql.user} onChange={e => set('mysql', 'user', e.target.value)} /></Field>
+          <Field label="Password"><input type="password" value={settings.mysql.password} onChange={e => set('mysql', 'password', e.target.value)} /></Field>
+          <Field label="Connection timeout (ms)"><input type="number" value={settings.mysql.connectTimeoutMs} onChange={e => set('mysql', 'connectTimeoutMs', Number(e.target.value))} /></Field>
         </div>
-        <Check checked={settings.mysql.ssl} onChange={v=>set('mysql','ssl',v)} label="Usa TLS/SSL per MySQL" />
-        <div className="actions"><button onClick={test} disabled={busy}>Test connessione</button><button className="primary" onClick={save} disabled={busy}>Salva</button></div>
-        <p className="hint">Password e token vengono salvati tramite Electron safeStorage/DPAPI su Windows, non nel repository Git.</p>
+
+        <Field label="Socket path or Windows named pipe" hint="Optional. Local Windows services frequently listen on a pipe such as \\.\pipe\mysql instead of TCP. When set, host and port are ignored.">
+          <input value={settings.mysql.socketPath} onChange={e => set('mysql', 'socketPath', e.target.value)} placeholder="\\.\pipe\mysql or /var/run/mysqld/mysqld.sock" />
+        </Field>
+
+        <div className="grid two">
+          <Field label="Connection collation" hint="utf8mb4 maps to utf8mb4_general_ci, the widest collation that exists on MySQL 5.6 through 9.x.">
+            <Select value={settings.mysql.collation} onChange={v => set('mysql', 'collation', v)} options={COLLATIONS} />
+          </Field>
+          <Field label="TLS / SSL mode">
+            <Select value={settings.mysql.tlsMode} onChange={v => set('mysql', 'tlsMode', v)} options={TLS_MODES} />
+          </Field>
+        </div>
+
+        {tlsOn && <>
+          <div className="grid two">
+            <Field label="CA certificate file" hint="Required for verify-ca and verify-full.">
+              <input value={settings.mysql.caFile} onChange={e => set('mysql', 'caFile', e.target.value)} placeholder="C:\certs\ca.pem" />
+            </Field>
+            <Field label="Client certificate file" hint="Optional, for servers requiring mutual TLS.">
+              <input value={settings.mysql.certFile} onChange={e => set('mysql', 'certFile', e.target.value)} placeholder="C:\certs\client.pem" />
+            </Field>
+            <Field label="Client key file">
+              <input value={settings.mysql.keyFile} onChange={e => set('mysql', 'keyFile', e.target.value)} placeholder="C:\certs\client.key" />
+            </Field>
+            <Field label="Minimum TLS version">
+              <Select value={settings.mysql.minTlsVersion} onChange={v => set('mysql', 'minTlsVersion', v)} options={TLS_VERSIONS} />
+            </Field>
+          </div>
+          <Check checked={settings.mysql.allowTlsFallback} onChange={v => set('mysql', 'allowTlsFallback', v)} label="Retry with weaker TLS settings if the handshake fails" />
+          <p className="hint">With fallback enabled the bridge first tries your settings, then an unverified certificate, then TLSv1 with legacy ciphers, then no TLS. Every attempt is written to the log, so a downgraded connection is never silent.</p>
+        </>}
+
+        <details className="advanced">
+          <summary>Advanced</summary>
+          <div className="grid two">
+            <Field label="Authentication plugin" hint="Leave on automatic unless the handshake fails.">
+              <Select value={settings.mysql.authPlugin} onChange={v => set('mysql', 'authPlugin', v)} options={AUTH_PLUGINS} />
+            </Field>
+            <Field label="Session time zone" hint="A UTC offset avoids any dependency on the mysql.time_zone tables.">
+              <input value={settings.mysql.sessionTimeZone} onChange={e => set('mysql', 'sessionTimeZone', e.target.value)} placeholder="+00:00" />
+            </Field>
+            <Field label="Session SQL mode" hint="Leave empty to keep the server default.">
+              <input value={settings.mysql.sqlMode} onChange={e => set('mysql', 'sqlMode', e.target.value)} placeholder="STRICT_TRANS_TABLES,NO_ZERO_DATE" />
+            </Field>
+            <Field label="group_concat_max_len" hint="0 keeps the server default of 1024, which silently truncates aggregated text.">
+              <input type="number" value={settings.mysql.groupConcatMaxLen} onChange={e => set('mysql', 'groupConcatMaxLen', Number(e.target.value))} />
+            </Field>
+            <Field label="TLS ciphers" hint="Legacy servers may need DEFAULT@SECLEVEL=0.">
+              <input value={settings.mysql.ciphers} onChange={e => set('mysql', 'ciphers', e.target.value)} placeholder="DEFAULT@SECLEVEL=0" />
+            </Field>
+            <Field label="Server public key (PEM)" hint="Optional. Skips the RSA round-trip and works with hosts that block key retrieval.">
+              <input value={settings.mysql.serverPublicKey} onChange={e => set('mysql', 'serverPublicKey', e.target.value)} />
+            </Field>
+          </div>
+        </details>
+
+        <div className="actions">
+          <button onClick={test} disabled={busy}>Test connection</button>
+          <button className="primary" onClick={save} disabled={busy}>Save</button>
+        </div>
+        <p className="hint">Passwords and tokens are stored with Electron safeStorage (DPAPI on Windows) and are never written to the Git repository.</p>
+
+        {(capabilities || warnings.length > 0) && <div className="statusbox">
+          {probe && <>
+            <Row label="Detected server" value={probe.versionLabel} />
+            <Row label="Raw version" value={probe.version} />
+            <Row label="SQL mode" value={probe.sqlMode || '—'} />
+            <Row label="Server charset" value={probe.characterSetServer || '—'} />
+            <Row label="Negotiated TLS" value={probe.tlsMode || 'off'} />
+          </>}
+          {capabilities && <>
+            <Row label="JSON column type" value={capabilities.jsonType ? 'available' : 'not available (needs 5.7.8+)'} />
+            <Row label="CTEs (WITH)" value={capabilities.cte ? 'available' : 'not available (needs 8.0+)'} />
+            <Row label="Expression defaults" value={capabilities.defaultExpressions ? 'available' : 'not available (needs 8.0.13+)'} />
+            <Row label="InnoDB index key limit" value={`${capabilities.maxIndexKeyBytes} bytes`} />
+          </>}
+          {warnings.length > 0 && <div className="tags">{warnings.map(w => <span className="tag" key={w.id}>{w.message}</span>)}</div>}
+        </div>}
       </section>}
 
       {tab === 'mcp' && <section className="panel">
-        <h2>MCP e ngrok</h2>
+        <h2>MCP and ngrok</h2>
         <div className="grid two">
-          <Field label="Porta MCP locale"><input type="number" value={settings.mcp.port} onChange={e=>set('mcp','port',Number(e.target.value))} /></Field>
-          <Field label="Modalità">
-            <select value={settings.mcp.accessMode} onChange={e=>set('mcp','accessMode',e.target.value)}>
-              <option value="read">READ ONLY</option><option value="write">READ + WRITE</option><option value="admin">ADMIN</option>
-            </select>
+          <Field label="Local MCP port"><input type="number" value={settings.mcp.port} onChange={e => set('mcp', 'port', Number(e.target.value))} /></Field>
+          <Field label="Access mode">
+            <Select value={settings.mcp.accessMode} onChange={v => set('mcp', 'accessMode', v)} options={[['read', 'READ ONLY'], ['write', 'READ + WRITE'], ['admin', 'ADMIN']]} />
           </Field>
-          <Field label="ngrok Authtoken"><input type="password" value={settings.ngrok.authtoken} onChange={e=>set('ngrok','authtoken',e.target.value)} /></Field>
-          <Field label="Dominio ngrok fisso"><input value={settings.ngrok.domain} onChange={e=>set('ngrok','domain',e.target.value)} placeholder="xxxx.ngrok-free.app (opzionale)" /></Field>
+          <Field label="ngrok authtoken"><input type="password" value={settings.ngrok.authtoken} onChange={e => set('ngrok', 'authtoken', e.target.value)} /></Field>
+          <Field label="Fixed ngrok domain"><input value={settings.ngrok.domain} onChange={e => set('ngrok', 'domain', e.target.value)} placeholder="example.ngrok-free.app (optional)" /></Field>
         </div>
-        <Check checked={settings.ngrok.enabled} onChange={v=>set('ngrok','enabled',v)} label="Pubblica MCP tramite ngrok" />
-        <Field label="Bearer token MCP opzionale"><input type="password" value={settings.mcp.bearerToken} onChange={e=>set('mcp','bearerToken',e.target.value)} placeholder="lascia vuoto se il client non supporta header Authorization" /></Field>
+        <Check checked={settings.ngrok.enabled} onChange={v => set('ngrok', 'enabled', v)} label="Publish the MCP endpoint through ngrok" />
+        <Field label="Optional MCP bearer token"><input type="password" value={settings.mcp.bearerToken} onChange={e => set('mcp', 'bearerToken', e.target.value)} placeholder="leave empty if the client cannot send an Authorization header" /></Field>
+        <details className="advanced">
+          <summary>Advanced</summary>
+          <Check checked={settings.mcp.jsonResponses} onChange={v => set('mcp', 'jsonResponses', v)} label="Answer with application/json instead of an SSE stream (expected by most remote MCP clients)" />
+          <Field label="Extra allowed Host headers" hint="The local interface and the live ngrok host are always allowed.">
+            <textarea value={hostsText} onChange={e => set('mcp', 'allowedHosts', splitList(e.target.value))} rows="2" />
+          </Field>
+          <Field label="Extra allowed Origin headers">
+            <textarea value={originsText} onChange={e => set('mcp', 'allowedOrigins', splitList(e.target.value))} rows="2" />
+          </Field>
+        </details>
         <div className="actions">
-          {!status.running ? <button className="primary" onClick={start} disabled={busy}>Avvia MCP</button> : <button className="danger" onClick={stop} disabled={busy}>Ferma MCP</button>}
-          <button onClick={save} disabled={busy}>Salva</button>
+          {!status.running ? <button className="primary" onClick={start} disabled={busy}>Start MCP</button> : <button className="danger" onClick={stop} disabled={busy}>Stop MCP</button>}
+          <button onClick={save} disabled={busy}>Save</button>
         </div>
         <div className="statusbox">
-          <Row label="MCP locale" value={status.mcpUrl || '—'} copy />
-          <Row label="MCP pubblico" value={status.publicUrl || '—'} copy />
+          <Row label="Local MCP" value={status.mcpUrl || '—'} copy />
+          <Row label="Public MCP" value={status.publicUrl || '—'} copy />
           <Row label="Health" value={status.healthUrl || '—'} copy />
+          {status.mysqlVersion && <Row label="Connected server" value={`${status.mysqlVendor} ${status.mysqlVersion}`} />}
         </div>
       </section>}
 
       {tab === 'security' && <section className="panel">
-        <h2>Sicurezza</h2>
+        <h2>Security</h2>
         <div className="grid two">
-          <Field label="Limite massimo SELECT"><input type="number" value={settings.mcp.selectLimit} onChange={e=>set('mcp','selectLimit',Number(e.target.value))} /></Field>
-          <Field label="Timeout query (ms)"><input type="number" value={settings.mcp.queryTimeoutMs} onChange={e=>set('mcp','queryTimeoutMs',Number(e.target.value))} /></Field>
+          <Field label="Maximum SELECT limit"><input type="number" value={settings.mcp.selectLimit} onChange={e => set('mcp', 'selectLimit', Number(e.target.value))} /></Field>
+          <Field label="Query timeout (ms)"><input type="number" value={settings.mcp.queryTimeoutMs} onChange={e => set('mcp', 'queryTimeoutMs', Number(e.target.value))} /></Field>
         </div>
-        <Check checked={settings.mcp.blockMultipleStatements} onChange={v=>set('mcp','blockMultipleStatements',v)} label="Blocca query SQL multiple" />
-        <Check checked={settings.mcp.requireWhereForUpdateDelete} onChange={v=>set('mcp','requireWhereForUpdateDelete',v)} label="Richiedi WHERE per UPDATE e DELETE" />
-        <Check checked={settings.mcp.confirmUpdate} onChange={v=>set('mcp','confirmUpdate',v)} label="Richiedi approvazione per UPDATE" />
-        <Check checked={settings.mcp.confirmDelete} onChange={v=>set('mcp','confirmDelete',v)} label="Richiedi approvazione per DELETE" />
-        <Check checked={settings.mcp.confirmDdl} onChange={v=>set('mcp','confirmDdl',v)} label="Richiedi approvazione per DDL (CREATE/ALTER/DROP...)" />
-        <Check checked={settings.mcp.enableExecuteSql} onChange={v=>set('mcp','enableExecuteSql',v)} label="Abilita SQL amministrativo libero via execute_sql (solo ADMIN)" />
-        <Field label="Whitelist tabelle (separata da virgole; vuota = tutte)">
-          <textarea value={whitelistText} onChange={e=>set('mcp','allowedTables',e.target.value.split(',').map(x=>x.trim()).filter(Boolean))} rows="3" />
+        <Check checked={settings.mcp.blockMultipleStatements} onChange={v => set('mcp', 'blockMultipleStatements', v)} label="Block multi-statement SQL" />
+        <Check checked={settings.mcp.blockFileAccess} onChange={v => set('mcp', 'blockFileAccess', v)} label="Block INTO OUTFILE, INTO DUMPFILE and LOAD_FILE()" />
+        <Check checked={settings.mcp.allowSlowFunctions} onChange={v => set('mcp', 'allowSlowFunctions', v)} label="Allow SLEEP() and BENCHMARK() (denial-of-service risk)" />
+        <Check checked={settings.mcp.requireWhereForUpdateDelete} onChange={v => set('mcp', 'requireWhereForUpdateDelete', v)} label="Require a WHERE clause for UPDATE and DELETE" />
+        <Check checked={settings.mcp.confirmUpdate} onChange={v => set('mcp', 'confirmUpdate', v)} label="Require approval for UPDATE" />
+        <Check checked={settings.mcp.confirmDelete} onChange={v => set('mcp', 'confirmDelete', v)} label="Require approval for DELETE" />
+        <Check checked={settings.mcp.confirmDdl} onChange={v => set('mcp', 'confirmDdl', v)} label="Require approval for DDL (CREATE / ALTER / DROP...)" />
+        <Check checked={settings.mcp.enableExecuteSql} onChange={v => set('mcp', 'enableExecuteSql', v)} label="Enable free administrative SQL through execute_sql (ADMIN only)" />
+        <Field label="Table whitelist (comma separated, empty means all)">
+          <textarea value={whitelistText} onChange={e => set('mcp', 'allowedTables', splitList(e.target.value))} rows="3" />
         </Field>
-        <div className="warning">La modalità ADMIN può modificare o eliminare strutture e dati. Usa un utente MySQL con i soli privilegi realmente necessari.</div>
-        <div className="actions"><button className="primary" onClick={save} disabled={busy}>Salva sicurezza</button></div>
+        <div className="warning">ADMIN mode can alter or destroy schemas and data. Use a MySQL user with only the privileges that are genuinely required.</div>
+        <div className="actions"><button className="primary" onClick={save} disabled={busy}>Save security</button></div>
       </section>}
 
       {tab === 'console' && <section className="panel">
-        <h2>SQL Console locale</h2>
-        <p className="hint">Rispetta la modalità configurata e il blocco multi-statement. Le approvazioni MCP non sono richieste perché l’azione viene avviata manualmente dall’app.</p>
-        <textarea className="sql" value={sql} onChange={e=>setSql(e.target.value)} spellCheck="false" />
-        <div className="actions"><button className="primary" onClick={runSql} disabled={busy}>Esegui</button></div>
+        <h2>Local SQL console</h2>
+        <p className="hint">Respects the configured access mode and the multi-statement block. MCP approvals are not required here because the statement is started manually from the app.</p>
+        <textarea className="sql" value={sql} onChange={e => setSql(e.target.value)} spellCheck="false" />
+        <div className="actions"><button className="primary" onClick={runSql} disabled={busy}>Execute</button></div>
         {sqlResult && <pre className={sqlResult.ok ? '' : 'error'}>{JSON.stringify(sqlResult, null, 2)}</pre>}
       </section>}
 
       {tab === 'approvals' && <section className="panel">
-        <h2>Richieste di approvazione</h2>
-        {!approvals.length && <p className="hint">Nessuna richiesta.</p>}
+        <h2>Approval requests</h2>
+        {!approvals.length && <p className="hint">No requests.</p>}
         <div className="approvalList">
           {approvals.map(a => <article key={a.id} className={`approval ${a.status}`}>
             <div><strong>{a.summary}</strong><span>{a.status}</span></div>
             <code>{a.sql || a.action}</code>
             <small>{a.createdAt}</small>
-            {a.status === 'pending' && <div className="actions"><button className="danger" onClick={()=>decide(a.id,false)}>Nega</button><button className="primary" onClick={()=>decide(a.id,true)}>Approva una volta</button></div>}
+            {a.status === 'pending' && <div className="actions">
+              <button className="danger" onClick={() => decide(a.id, false)}>Deny</button>
+              <button className="primary" onClick={() => decide(a.id, true)}>Approve once</button>
+            </div>}
           </article>)}
         </div>
       </section>}
 
       {tab === 'logs' && <section className="panel">
-        <div className="titleRow"><h2>Log</h2><button onClick={()=>setLogs([])}>Pulisci</button></div>
-        <div className="logs">{logs.map((l,i)=><div key={i}><time>{new Date(l.time).toLocaleTimeString()}</time><b>{l.type}</b><span>{JSON.stringify(l.data)}</span></div>)}</div>
+        <div className="titleRow"><h2>Logs</h2><button onClick={() => setLogs([])}>Clear</button></div>
+        <div className="logs">{logs.map((l, i) => <div key={i}><time>{new Date(l.time).toLocaleTimeString()}</time><b>{l.type}</b><span>{JSON.stringify(l.data)}</span></div>)}</div>
       </section>}
     </main>
   </div>;
 }
 
-function Field({ label, children }) { return <label className="field"><span>{label}</span>{children}</label>; }
-function Check({ checked, onChange, label }) { return <label className="check"><input type="checkbox" checked={!!checked} onChange={e=>onChange(e.target.checked)} /><span>{label}</span></label>; }
-function Row({ label, value, copy }) { return <div className="row"><span>{label}</span><code>{value}</code>{copy && value !== '—' && <button onClick={()=>navigator.clipboard.writeText(value)}>Copia</button>}</div>; }
+function splitList(text) {
+  return String(text).split(',').map(x => x.trim()).filter(Boolean);
+}
+
+function compatibilityFrom(probe) {
+  const caps = probe?.capabilities || {};
+  const notes = [];
+  if (!caps.jsonType) notes.push({ id: 'no-json', message: 'JSON columns need MySQL 5.7.8 or newer and will be rejected by create_table.' });
+  if (!caps.cte) notes.push({ id: 'no-cte', message: 'Common table expressions (WITH) need MySQL 8.0 or newer.' });
+  if (!caps.defaultExpressions) notes.push({ id: 'no-default-expr', message: 'Expression defaults need MySQL 8.0.13 or newer, so only literals are accepted.' });
+  if (caps.maxIndexKeyBytes < 3072) notes.push({ id: 'small-index-key', message: `InnoDB index keys are limited to ${caps.maxIndexKeyBytes} bytes on this server, so wide utf8mb4 columns are indexed by prefix.` });
+  return notes;
+}
+
+function Field({ label, hint, children }) { return <label className="field"><span>{label}</span>{children}{hint && <small className="hint">{hint}</small>}</label>; }
+function Check({ checked, onChange, label }) { return <label className="check"><input type="checkbox" checked={!!checked} onChange={e => onChange(e.target.checked)} /><span>{label}</span></label>; }
+function Select({ value, onChange, options }) { return <select value={value} onChange={e => onChange(e.target.value)}>{options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>; }
+function Row({ label, value, copy }) { return <div className="row"><span>{label}</span><code>{value}</code>{copy && value !== '—' && <button onClick={() => navigator.clipboard.writeText(value)}>Copy</button>}</div>; }

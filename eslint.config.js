@@ -10,12 +10,14 @@ export default [
     languageOptions: {
       ecmaVersion: 2023,
       sourceType: 'module',
+      parserOptions: { ecmaFeatures: { jsx: true } },
       globals: { ...globals.browser, ...globals.node }
     },
     plugins: {
       'react-hooks': reactHooks,
       'react-refresh': reactRefresh
     },
+    settings: { react: { version: 'detect' } },
     rules: {
       ...js.configs.recommended.rules,
       ...reactHooks.configs.recommended.rules,
