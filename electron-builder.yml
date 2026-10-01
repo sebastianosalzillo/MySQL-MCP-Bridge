@@ -7,6 +7,7 @@ files:
   - dist/**/*
   - electron/**/*
   - server/**/*
+  - assets/**/*
   - package.json
 asar: true
 npmRebuild: true
@@ -16,7 +17,6 @@ win:
     - target: nsis
       arch:
         - x64
-  publisherName: null
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true

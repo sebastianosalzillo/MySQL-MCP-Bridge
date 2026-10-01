@@ -77,6 +77,16 @@ async function query(ctx, sql, values = []) {
   return { rows, fields: fields?.map?.(f => ({ name: f.name, table: f.table, type: f.columnType })) || undefined };
 }
 
+/**
+ * information_schema hands back its columns in upper case, so the key on a row
+ * depends on which statement produced it. Reading through this keeps the
+ * callers on the lower case names they were written with.
+ */
+function field(row, name) {
+  if (!row) return undefined;
+  return row[name] ?? row[name.toUpperCase()];
+}
+
 async function tableInfo(ctx, database, table) {
   const { rows } = await query(
     ctx,
@@ -85,10 +95,10 @@ async function tableInfo(ctx, database, table) {
   );
   const info = rows[0] || {};
   return {
-    engine: info.engine || info.ENGINE || '',
-    rowFormat: info.row_format || info.ROW_FORMAT || '',
-    collation: info.table_collation || info.TABLE_COLLATION || '',
-    createOptions: info.create_options || info.CREATE_OPTIONS || ''
+    engine: field(info, 'engine') || '',
+    rowFormat: field(info, 'row_format') || '',
+    collation: field(info, 'table_collation') || '',
+    createOptions: field(info, 'create_options') || ''
   };
 }
 
@@ -139,7 +149,8 @@ export function registerTools(server, ctx) {
     inputSchema: {}
   }, async () => {
     assertMode(ctx.settings, 'read');
-    const { rows } = await query(ctx, 'SELECT DATABASE() AS database_name, CURRENT_USER() AS current_user, CONNECTION_ID() AS connection_id');
+    // CURRENT_USER is a reserved word from MySQL 8.3 on, so the alias is quoted.
+    const { rows } = await query(ctx, 'SELECT DATABASE() AS database_name, CURRENT_USER() AS `current_user`, CONNECTION_ID() AS connection_id');
     const version = ctx.serverVersion;
     return result({
       server: version ? describeVersion(version) : 'unknown',
@@ -497,8 +508,8 @@ export function registerTools(server, ctx) {
     );
     if (!current?.length) throw new Error(`Column '${column}' does not exist on ${db}.${table}.`);
 
-    const finalType = validateColumnType(type || current[0].column_type, ctx.capabilities);
-    const finalNullable = nullable === undefined ? current[0].is_nullable === 'YES' : nullable;
+    const finalType = validateColumnType(type || field(current[0], 'column_type'), ctx.capabilities);
+    const finalNullable = nullable === undefined ? field(current[0], 'is_nullable') === 'YES' : nullable;
 
     let d = `MODIFY COLUMN ${quoteId(column)} ${finalType} ${finalNullable ? 'NULL' : 'NOT NULL'}`;
     if (default_value !== undefined) d += ` DEFAULT ${sqlLiteral(default_value)}`;
@@ -541,18 +552,18 @@ export function registerTools(server, ctx) {
       'SELECT column_name, data_type, character_maximum_length, character_set_name FROM information_schema.columns WHERE table_schema = ? AND table_name = ?',
       [db, table]
     );
-    const byName = new Map(columnRows.map(c => [c.column_name, c]));
+    const byName = new Map(columnRows.map(c => [field(c, 'column_name'), c]));
 
     const notes = [];
     const parts = columns.map((name) => {
       const meta = byName.get(name);
       if (!meta) throw new Error(`Column '${name}' does not exist on ${db}.${table}.`);
-      const type = String(meta.data_type).toLowerCase();
+      const type = String(field(meta, 'data_type')).toLowerCase();
       const isString = ['varchar', 'char', 'text', 'tinytext', 'mediumtext', 'longtext'].includes(type);
       const isBinary = ['binary', 'varbinary', 'blob', 'tinyblob', 'mediumblob', 'longblob'].includes(type);
 
       if (isString || isBinary) {
-        const perChar = isBinary ? 1 : bytesPerChar(meta.character_set_name || info.collation);
+        const perChar = isBinary ? 1 : bytesPerChar(field(meta, 'character_set_name') || info.collation);
         const maxChars = Math.max(1, Math.floor(budget.perColumn / perChar));
         if (prefix_length) {
           if (prefix_length > maxChars) {
@@ -560,7 +571,8 @@ export function registerTools(server, ctx) {
           }
           return `${quoteId(name)}(${prefix_length})`;
         }
-        if (Number(meta.character_maximum_length) > maxChars || !meta.character_maximum_length) {
+        const maxLength = Number(field(meta, 'character_maximum_length'));
+        if (maxLength > maxChars || !maxLength) {
           notes.push(`${name} indexed with a ${maxChars} character prefix to stay under the ${budget.perColumn} byte limit`);
           return `${quoteId(name)}(${maxChars})`;
         }

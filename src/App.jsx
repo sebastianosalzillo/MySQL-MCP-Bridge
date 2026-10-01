@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import appIcon from '../assets/icon.png';
 
 const empty = {
   mysql: {
@@ -131,9 +132,12 @@ export default function App() {
 
   return <div className="app">
     <header>
-      <div>
+      <div className="brand">
+        <img className="app-icon" src={appIcon} alt="" width="64" height="64" />
+        <div>
         <h1>MySQL MCP Bridge</h1>
         <p>Expose a MySQL server to MCP clients through a local endpoint and an optional ngrok tunnel.</p>
+        </div>
       </div>
       <div className={`badge ${status.running ? 'online' : ''}`}>{status.running ? 'ONLINE' : 'OFFLINE'}</div>
     </header>
