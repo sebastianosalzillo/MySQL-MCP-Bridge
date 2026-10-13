@@ -17,7 +17,8 @@
     "start": "electron .",
     "test": "node --test tests/*.test.mjs",
     "test:matrix": "node tests/compat.matrix.mjs",
-    "check": "npm run test && npm run lint && npm run build:renderer"
+    "check": "npm run test && npm run lint && npm run build:renderer",
+    "start:server": "node server/standalone.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.24.0",

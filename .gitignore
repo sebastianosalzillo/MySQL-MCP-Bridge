@@ -64,3 +64,6 @@ temp/
 *.db
 *.sqlite
 *.sqlite3
+
+# Standalone service config (may contain connection details)
+config/standalone.json

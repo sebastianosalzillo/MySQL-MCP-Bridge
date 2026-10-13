@@ -288,3 +288,7 @@ The bridge uses Streamable HTTP, the recommended transport for remote MCP server
 ## License
 
 MIT.
+
+## Standalone Windows service (preview)
+
+Run this MCP bridge without Electron using `npm run start:server -- --config config/standalone.json`. See [Windows standalone setup](docs/standalone-windows.md). The desktop app continues to work independently; remote Electron management is not yet implemented.
