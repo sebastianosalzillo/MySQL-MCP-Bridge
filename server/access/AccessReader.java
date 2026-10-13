@@ -51,7 +51,7 @@ class AccessReader {
     }
 
     public static void main(String[] args) throws Exception {
-        if (args.length < 6) throw new IllegalArgumentException("Missing arguments.");
+        if (args.length < 5) throw new IllegalArgumentException("Missing arguments.");
         String operation = args[0];
         Path file = Paths.get(args[1]).toAbsolutePath().normalize();
         if (!Files.isRegularFile(file)) throw new IllegalArgumentException("File does not exist.");

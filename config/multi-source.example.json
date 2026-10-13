@@ -1,0 +1,69 @@
+{
+  "sources": [
+    {
+      "id": "cash",
+      "name": "Cash Merola",
+      "type": "mysql",
+      "mysql": {
+        "host": "192.168.1.10",
+        "port": 3306,
+        "database": "cash",
+        "user": "mcp_ro",
+        "password": "${MCP_CASH_PASSWORD}",
+        "collation": "utf8mb4",
+        "tlsMode": "off",
+        "allowTlsFallback": false
+      },
+      "allowedTables": []
+    },
+    {
+      "id": "superm_01",
+      "name": "SuperM 01",
+      "type": "mysql",
+      "mysql": {
+        "host": "192.168.1.101",
+        "port": 3307,
+        "database": "negozio",
+        "user": "mcp_ro",
+        "password": "${MCP_SUPERM01_PASSWORD}",
+        "collation": "utf8mb4",
+        "tlsMode": "off",
+        "allowTlsFallback": false
+      },
+      "allowedTables": [
+        "prodotti"
+      ]
+    },
+    {
+      "id": "access_legacy",
+      "name": "Access legacy",
+      "type": "access",
+      "file": "C:\\\\Snapshots\\\\Legacy.mdb",
+      "allowedTables": [
+        "Prodotti"
+      ]
+    },
+    {
+      "id": "access_modern",
+      "name": "Access modern",
+      "type": "access",
+      "file": "C:\\\\Snapshots\\\\Modern.accdb",
+      "allowedTables": []
+    }
+  ],
+  "mcp": {
+    "port": 3001,
+    "accessMode": "read",
+    "bearerToken": "${MCP_BEARER_TOKEN}",
+    "selectLimit": 200,
+    "queryTimeoutMs": 30000,
+    "blockMultipleStatements": true,
+    "blockFileAccess": true,
+    "allowSlowFunctions": false,
+    "enableExecuteSql": false,
+    "jsonResponses": true
+  },
+  "ngrok": {
+    "enabled": false
+  }
+}

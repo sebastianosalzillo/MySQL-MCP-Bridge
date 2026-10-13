@@ -47,3 +47,32 @@ The headless server deliberately does not decrypt Electron's `safeStorage` file:
 - ngrok requires a non-empty bearer token. Review the exposure of confidential business data before enabling a tunnel.
 - The existing `select_rows` tool enforces `selectLimit`, but `execute_sql` can return unbounded query results: do not run heavy AI queries against live production until an output cap has been added.
 - This first phase does not include multi-server MySQL, Microsoft Access `.mdb` / `.accdb`, or a standalone service control panel within Electron. Those remain separate planned changes.
+
+## Multi-server MySQL + Access (preview)
+
+Instead of the single \`mysql\` section, you can configure \`sources\`. Start with
+\`config/multi-source.example.json\`. Every source has a unique \`id\`, \`name\`, \`type\` and credentials/path.
+- MySQL: distinct host, port, default database, SELECT-only account and optional \`allowedTables\`.
+- Access: read-only \`.mdb\` or \`.accdb\` file; local or UNC snapshots and optional \`allowedTables\`.
+
+The MCP endpoint then exposes only these tools: \`list_sources\`, \`list_tables\`, \`describe_table\`,
+\`select_rows\` and \`read_query\`. Every tool has a \`source_id\`. \`read_query\` is MySQL-only,
+requires no table whitelist and wraps the SELECT in a limiting derived table. Complex statements
+incompatible with derived tables may be rejected.
+
+### Access runtime
+Install Java 11+ and UCanAccess from [spannm/ucanaccess](https://github.com/spannm/ucanaccess),
+with **all runtime dependency JARs**. Configure the classpath including the dependencies,
+e.g. in the service's environment \`MCP_ACCESS_CLASSPATH=C:\ProgramData\MySQLMCPBridge\jdbc\*\`.
+The included \`server/access/AccessReader.java\` runs in Java source-file mode.
+No MS Access/Office installation required. Never point the reader at an actively written
+Access database: create a consistent snapshot during a safe maintenance/backup window.
+
+Access uses metadata and bounded table reads only; no arbitrary SQL, file writes or linked UNC
+databases. Access field/table names must contain letters, digits, spaces, underscores, periods or
+hyphens; unsupported names are rejected. The Access integration must be tested against real
+company .mdb/.accdb snapshots before production.
+
+The preview only supports one MCP endpoint, while connections are resolved per \`source_id\`.
+If a MySQL connection is unreachable the other sources remain available. This preview does not
+automatically migrate or reconfigure the Electron desktop app or install WinSW.
