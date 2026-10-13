@@ -292,3 +292,17 @@ MIT.
 ## Standalone Windows service (preview)
 
 Run this MCP bridge without Electron using `npm run start:server -- --config config/standalone.json`. See [Windows standalone setup](docs/standalone-windows.md). The desktop app continues to work independently; remote Electron management is not yet implemented.
+
+## Preview: multi-source read-only bridge
+
+The independent Node.js service can expose multiple sources through one MCP endpoint using the `sources` configuration array:
+- MySQL: per-source hostname, port, database and credentials.
+- Microsoft Access: `.mdb` and `.accdb` snapshots using Java 11+ and UCanAccess.
+
+Only `list_sources`, `list_tables`, `describe_table`, `select_rows` and MySQL-only `read_query` are exposed in multi-source mode. The standalone service enforces READ ONLY and requires an authenticating bearer token when ngrok is enabled. Use SELECT-only MySQL credentials.
+
+Electron now has a **Standalone Sources** tab to edit source profiles, export a `standalone.json` with secret placeholders and inspect the local service health. Export does not restart or install the Windows service.
+
+**Example:** [Multi-source config](config/multi-source.example.json). **Windows setup and limitations:** [Standalone documentation](docs/standalone-windows.md).
+
+**Preview limitations:** Access requires external UCanAccess dependencies and has not been tested on production files; MySQL 5.5 is outside the project's documented support baseline; verify on copies of real databases. The independent Windows service still requires an external wrapper (WinSW), and no production deployment has been performed.
