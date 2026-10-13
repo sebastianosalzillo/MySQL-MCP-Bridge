@@ -306,3 +306,7 @@ Electron now has a **Standalone Sources** tab to edit source profiles, export a 
 **Example:** [Multi-source config](config/multi-source.example.json). **Windows setup and limitations:** [Standalone documentation](docs/standalone-windows.md).
 
 **Preview limitations:** Access requires external UCanAccess dependencies and has not been tested on production files; MySQL 5.5 is outside the project's documented support baseline; verify on copies of real databases. The independent Windows service still requires an external wrapper (WinSW), and no production deployment has been performed.
+
+## AI prompts and schedules (preview)
+
+The standalone service supports an optional local AI scheduler for OpenCode, Claude Code, and Codex. You can enable/disable company instructions **per task** using a dedicated managed workspace. See [AI Scheduler setup](docs/ai-scheduler.md) and [automation example](config/automation.example.json).
