@@ -22,7 +22,31 @@ export function validateStandaloneSettings(settings) {
   if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
     throw new Error('Standalone configuration must be a JSON object.');
   }
-  if (!settings.mysql || typeof settings.mysql !== 'object' || !settings.mysql.user) {
+  const sources = settings.sources;
+  const multi = Array.isArray(sources) && sources.length > 0;
+  if (multi) {
+    const ids = new Set();
+    for (const source of sources) {
+      if (!source || !/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(source.id || '')) {
+        throw new Error('Each source needs an id of 1-64 letters, digits, hyphens or underscores.');
+      }
+      if (ids.has(source.id)) throw new Error(`Duplicate source id: ${source.id}`);
+      ids.add(source.id);
+      if (!['mysql', 'access'].includes(source.type)) {
+        throw new Error(`Unsupported database type for ${source.id}`);
+      }
+      if (source.type === 'mysql' && (!source.mysql?.user || !source.mysql?.database)) {
+        throw new Error(`MySQL source ${source.id} requires mysql.user and mysql.database.`);
+      }
+      if (source.type === 'access' && !/\.((mdb)|(accdb))$/i.test(source.file || '')) {
+        throw new Error(`Access source ${source.id} needs a .mdb or .accdb file.`);
+      }
+      if (source.allowedTables && (!Array.isArray(source.allowedTables) ||
+           !source.allowedTables.every(t => typeof t === 'string' && t.length > 0))) {
+        throw new Error(`Invalid table whitelist for ${source.id}`);
+      }
+    }
+  } else if (!settings.mysql || typeof settings.mysql !== 'object' || !settings.mysql.user) {
     throw new Error('A MySQL connection with a dedicated read-only user is required.');
   }
   if (settings.mcp?.accessMode !== 'read') {
@@ -40,7 +64,11 @@ export function validateStandaloneSettings(settings) {
   }
   return {
     ...settings,
-    mysql: { ...settings.mysql, allowTlsFallback: settings.mysql.allowTlsFallback === true },
+    ...(multi
+      ? { sources: sources.map(source => source.type === 'mysql'
+          ? { ...source, mysql: { ...source.mysql, allowTlsFallback: source.mysql.allowTlsFallback === true } }
+          : { ...source }) }
+      : { mysql: { ...settings.mysql, allowTlsFallback: settings.mysql.allowTlsFallback === true } }),
     mcp: {
       ...settings.mcp,
       accessMode: 'read',

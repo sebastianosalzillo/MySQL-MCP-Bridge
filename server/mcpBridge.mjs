@@ -33,6 +33,10 @@ function isLoopback(req) {
 }
 
 export async function startBridge(settings, hooks = {}) {
+  if (Array.isArray(settings.sources) && settings.sources.length) {
+    const { startMultiBridge } = await import('./multiBridge.mjs');
+    return startMultiBridge(settings, hooks);
+  }
   const log = makeLogger(hooks.onLog);
   const approvals = new ApprovalManager(hooks.onApproval);
   let listener = null;
