@@ -1,0 +1,43 @@
+{
+  "sources": [
+    {
+      "id": "cash",
+      "name": "Cash",
+      "type": "mysql",
+      "mysql": {
+        "host": "127.0.0.1",
+        "port": 3306,
+        "database": "example",
+        "user": "mcp_ro",
+        "password": "${MCP_CASH_PASSWORD}",
+        "allowTlsFallback": false
+      },
+      "allowedTables": []
+    }
+  ],
+  "mcp": {
+    "port": 3001,
+    "accessMode": "read",
+    "selectLimit": 200,
+    "blockMultipleStatements": true,
+    "blockFileAccess": true,
+    "allowSlowFunctions": false,
+    "bearerToken": "${MCP_BEARER_TOKEN}"
+  },
+  "ngrok": {
+    "enabled": false
+  },
+  "automation": {
+    "enabled": true,
+    "stateDir": "C:\\ProgramData\\DatabaseMCPBridge\\automation",
+    "adminPort": 3002,
+    "adminToken": "${MCP_AI_ADMIN_TOKEN}",
+    "timeZone": "Europe/Rome",
+    "runTimeoutMs": 300000,
+    "executables": {
+      "opencode": "opencode",
+      "claude": "claude",
+      "codex": "codex"
+    }
+  }
+}

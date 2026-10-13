@@ -12,11 +12,32 @@ export async function runStandalone({ args = process.argv.slice(2), env = proces
     onStatus: status => log(JSON.stringify({ type: 'bridge:status', status })),
     onApproval: item => log(JSON.stringify({ type: 'bridge:approval', id: item.id, status: item.status }))
   });
+  let automation = null;
+  let adminApi = null;
+  try {
+    if (settings.automation?.enabled) {
+      const [{ createAutomationManager }, { startAutomationApi }] = await Promise.all([
+        import('./automation/manager.mjs'), import('./automation/api.mjs')
+      ]);
+      const options = { ...settings.automation, mcpPort: settings.mcp.port || 3001 };
+      automation = createAutomationManager(options);
+      adminApi = await startAutomationApi(automation, options);
+      automation.start();
+      log(JSON.stringify({ type: 'ai:scheduler', enabled: true, adminPort: adminApi.port }));
+    }
+  } catch (error) {
+    if (adminApi) await adminApi.stop().catch(() => {});
+    if (automation) await automation.stop().catch(() => {});
+    await controller.stop().catch(() => {});
+    throw error;
+  }
   let stopping = false;
   const shutdown = async signal => {
     if (stopping) return;
     stopping = true;
     try {
+      if (automation) await automation.stop();
+      if (adminApi) await adminApi.stop();
       await controller.stop();
       log(JSON.stringify({ type: 'bridge:shutdown', signal }));
     } catch (err) {

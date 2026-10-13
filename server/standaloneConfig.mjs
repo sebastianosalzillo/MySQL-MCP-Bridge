@@ -58,6 +58,20 @@ export function validateStandaloneSettings(settings) {
   if (settings.ngrok?.enabled && !settings.mcp.bearerToken) {
     throw new Error('A non-empty mcp.bearerToken is required when ngrok is enabled.');
   }
+  if (settings.automation?.enabled) {
+    const ai = settings.automation;
+    if (!ai.stateDir || typeof ai.stateDir !== 'string') {
+      throw new Error('automation.stateDir must be a writable directory.');
+    }
+    if (!ai.adminToken || String(ai.adminToken).length < 24) {
+      throw new Error('automation.adminToken must contain at least 24 characters.');
+    }
+    const adminPort = Number(ai.adminPort || 3002);
+    if (!Number.isInteger(adminPort) || adminPort < 1 || adminPort > 65535 ||
+        adminPort === Number(settings.mcp.port || 3001)) {
+      throw new Error('automation.adminPort must be valid and different from the MCP port.');
+    }
+  }
   const port = Number(settings.mcp.port || 3001);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error('mcp.port must be an integer from 1 to 65535.');
