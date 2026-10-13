@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('bridgeAPI', {
   getStatus: () => ipcRenderer.invoke('bridge:status'),
   runSql: (sql) => ipcRenderer.invoke('sql:run', sql),
   checkStandalone: (port) => ipcRenderer.invoke('standalone:status', port),
+  aiRequest: (request) => ipcRenderer.invoke('ai:request', request),
   exportStandalone: (settings) => ipcRenderer.invoke('standalone:export', settings),
   listApprovals: () => ipcRenderer.invoke('approvals:list'),
   decideApproval: (id, approved) => ipcRenderer.invoke('approvals:decide', { id, approved }),

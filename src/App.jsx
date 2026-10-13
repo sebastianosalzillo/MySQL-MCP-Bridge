@@ -66,6 +66,16 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [standaloneStatus, setStandaloneStatus] = useState(null);
   const [exportInfo, setExportInfo] = useState(null);
+  const [aiPort, setAiPort] = useState(3002);
+  const [aiToken, setAiToken] = useState('');
+  const [aiStatus, setAiStatus] = useState(null);
+  const [aiInstructions, setAiInstructions] = useState('');
+  const [aiJobs, setAiJobs] = useState([]);
+  const [aiHistory, setAiHistory] = useState([]);
+  const [aiJob, setAiJob] = useState({
+    name: '', prompt: '', provider: 'opencode', frequency: 'daily',
+    at: '08:00', weekday: 1, enabled: false, includeInstructions: true
+  });
 
   useEffect(() => {
     api.getSettings().then(setSettings);
@@ -109,6 +119,61 @@ export default function App() {
     } catch (e) { setNotice('Export failed: ' + e.message); }
     finally { setBusy(false); }
   }
+
+
+  async function aiCall(method, route, payload) {
+    return api.aiRequest({ method, route, payload, token: aiToken, port: aiPort });
+  }
+  async function refreshAi() {
+    setBusy(true);
+    try {
+      const [state, instructions, jobs, history] = await Promise.all([
+        aiCall('GET', '/status'),
+        aiCall('GET', '/instructions'),
+        aiCall('GET', '/jobs'),
+        aiCall('GET', '/history')
+      ]);
+      setAiStatus({ ...state, ...instructions });
+      setAiInstructions(instructions.instructions);
+      setAiJobs(jobs);
+      setAiHistory(history);
+      setNotice('AI service connected.');
+    } catch (error) { setNotice('AI service: ' + error.message); }
+    finally { setBusy(false); }
+  }
+  async function saveAiInstructions() {
+    setBusy(true);
+    try { await aiCall('PUT', '/instructions', { instructions: aiInstructions });
+      setNotice('Shared instructions saved.'); await refreshAi(); }
+    catch (error) { setNotice('Cannot save instructions: ' + error.message); }
+    finally { setBusy(false); }
+  }
+  async function saveAiJob() {
+    setBusy(true);
+    try {
+      await aiCall('POST', '/jobs', aiJob);
+      setAiJob({ name: '', prompt: '', provider: 'opencode', frequency: 'daily',
+        at: '08:00', weekday: 1, enabled: false, includeInstructions: true });
+      await refreshAi();
+    } catch (error) { setNotice('Cannot save task: ' + error.message); }
+    finally { setBusy(false); }
+  }
+  async function removeAiJob(id) {
+    setBusy(true);
+    try { await aiCall('DELETE', '/jobs/' + id); await refreshAi(); }
+    catch (error) { setNotice('Cannot delete task: ' + error.message); }
+    finally { setBusy(false); }
+  }
+  async function runAiJob(id) {
+    setBusy(true);
+    try {
+      const outcome = await aiCall('POST', '/jobs/' + id + '/run');
+      setNotice('AI execution: ' + outcome.status);
+      await refreshAi();
+    } catch (error) { setNotice('AI execution failed: ' + error.message); }
+    finally { setBusy(false); }
+  }
+  const setAiField = (field, value) => setAiJob(previous => ({ ...previous, [field]: value }));
 
   async function save() {
     setBusy(true); setNotice('');
@@ -174,7 +239,7 @@ export default function App() {
 
     <nav>
       {[
-        ['connection', 'Connection'], ['sources', 'Standalone Sources'], ['mcp', 'MCP + ngrok'], ['security', 'Security'], ['console', 'SQL Console'], ['approvals', 'Approvals'], ['logs', 'Logs']
+        ['connection', 'Connection'], ['sources', 'Standalone Sources'], ['ai', 'AI Agents + Scheduler'], ['mcp', 'MCP + ngrok'], ['security', 'Security'], ['console', 'SQL Console'], ['approvals', 'Approvals'], ['logs', 'Logs']
       ].map(([id, label]) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>
         {label}{id === 'approvals' && pending ? ` (${pending})` : ''}
       </button>)}
@@ -320,6 +385,77 @@ export default function App() {
           <Row label="Exported source count" value={String(exportInfo.count)} />
         </div>}
         <p className="hint">Export contains environment-variable placeholders for MySQL passwords and the MCP bearer token. Set these variables for the Windows service account, then start/restart the separate server. It is not started by this button.</p>
+      </section>}
+
+
+      {tab === 'ai' && <section className="panel">
+        <h2>AI instructions and task scheduler</h2>
+        <p className="hint">Shared project instructions can be ON or OFF per task. Supports OpenCode, Claude Code and Codex when their CLIs and MCP configuration are installed on the service machine. Admin access stays on 127.0.0.1, separate from ngrok/MCP.</p>
+        <div className="grid two">
+          <Field label="Local AI admin port"><input type="number" value={aiPort} onChange={e => setAiPort(Number(e.target.value))} /></Field>
+          <Field label="Admin token (not saved)"><input type="password" value={aiToken} onChange={e => setAiToken(e.target.value)} /></Field>
+        </div>
+        <div className="actions"><button onClick={refreshAi} disabled={busy}>Connect / Refresh</button></div>
+        {aiStatus && <>
+          <div className="statusbox">
+            <Row label="Scheduler" value={aiStatus.enabled ? 'Enabled' : 'Disabled'} />
+            <Row label="Active AI task" value={aiStatus.activeJob || 'None'} />
+            <Row label="Workspace WITH instructions" value={aiStatus.workspaceWithInstructions || aiStatus.workspaces?.withInstructions || ''} copy />
+            <Row label="Workspace WITHOUT instructions" value={aiStatus.workspaceWithoutInstructions || aiStatus.workspaces?.withoutInstructions || ''} copy />
+          </div>
+          <h3>Permanent instructions (optional per task)</h3>
+          <textarea className="sql" value={aiInstructions} onChange={e => setAiInstructions(e.target.value)}
+            rows={10} spellCheck="false" />
+          <div className="actions"><button className="primary" onClick={saveAiInstructions} disabled={busy}>Save shared instructions</button></div>
+          <h3>Create or edit scheduled task</h3>
+          <div className="grid two">
+            <Field label="Task name"><input value={aiJob.name} onChange={e => setAiField('name', e.target.value)} /></Field>
+            <Field label="AI engine"><Select value={aiJob.provider} onChange={v => setAiField('provider', v)}
+              options={[['opencode', 'OpenCode'], ['claude', 'Claude Code'], ['codex', 'Codex']]} /></Field>
+            <Field label="Frequency"><Select value={aiJob.frequency} onChange={v => setAiField('frequency', v)}
+              options={[['hourly', 'Every hour'], ['daily', 'Every day'], ['weekly', 'Every week']]} /></Field>
+            <Field label="Time (daily/weekly)"><input type="time" value={aiJob.at}
+              onChange={e => setAiField('at', e.target.value)} /></Field>
+          </div>
+          {aiJob.frequency === 'weekly' && <Field label="Weekday (0=Sunday, 1=Monday, ..., 6=Saturday)">
+            <Select value={String(aiJob.weekday)} onChange={v => setAiField('weekday', Number(v))}
+              options={['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((day, i) => [String(i), day])} />
+          </Field>}
+          <Field label="Task prompt">
+            <textarea className="sql" rows="5" value={aiJob.prompt} onChange={e => setAiField('prompt', e.target.value)} />
+          </Field>
+          <div className="actions">
+            <Check checked={aiJob.includeInstructions} onChange={v => setAiField('includeInstructions', v)}
+              label="Pass the permanent instructions to this task" />
+            <Check checked={aiJob.enabled} onChange={v => setAiField('enabled', v)}
+              label="Enable automatic schedule" />
+          </div>
+          <div className="actions">
+            <button className="primary" disabled={busy} onClick={saveAiJob}>{aiJob.id ? 'Update task' : 'Save task'}</button>
+            {aiJob.id && <button onClick={() => setAiJob({
+              name: '', prompt: '', provider: 'opencode', frequency: 'daily',
+              at: '08:00', weekday: 1, enabled: false, includeInstructions: true
+            })}>New task</button>}
+          </div>
+          <h3>Saved tasks</h3>
+          {!aiJobs.length && <p className="hint">No scheduled AI tasks yet.</p>}
+          {aiJobs.map(job => <div className="statusbox" key={job.id}>
+            <Row label={job.name} value={job.provider + ' | ' + job.frequency + ' | ' +
+              (job.includeInstructions ? 'Instructions ON' : 'Instructions OFF') +
+              (job.enabled ? ' | Scheduled' : ' | Paused')} />
+            <div className="actions">
+              <button onClick={() => setAiJob({ ...job })}>Edit</button>
+              <button disabled={busy} onClick={() => runAiJob(job.id)}>Run now</button>
+              <button className="danger" disabled={busy} onClick={() => removeAiJob(job.id)}>Delete</button>
+            </div>
+          </div>)}
+          <h3>Recent task history</h3>
+          {aiHistory.slice(0, 12).map(item => <div className="row" key={item.id}>
+            <span>{item.jobName} ({item.provider})</span>
+            <code>{item.status} — {item.startedAt}</code>
+          </div>)}
+          <p className="hint">Turning instructions OFF removes only dashboard-managed project instructions. The AI provider may still apply its own built-in or user-level instructions. Reports are written by the scheduler, not by the database MCP.</p>
+        </>}
       </section>}
 
       {tab === 'mcp' && <section className="panel">

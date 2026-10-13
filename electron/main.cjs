@@ -134,6 +134,14 @@ function exportSourceSettings(settings) {
   });
   return {
     sources,
+    automation: {
+      enabled: true,
+      stateDir: path.join(process.env.ProgramData || app.getPath('userData'), 'DatabaseMCPBridge', 'ai'),
+      adminPort: 3002,
+      adminToken: String.fromCharCode(36) + '{MCP_AI_ADMIN_TOKEN}',
+      timeZone: 'Europe/Rome',
+      runTimeoutMs: 300000
+    },
     mcp: {
       port: Number(settings.mcp?.port || 3001), accessMode: 'read',
       bearerToken: String.fromCharCode(36) + '{MCP_BEARER_TOKEN}',
@@ -297,4 +305,35 @@ ipcMain.handle('standalone:status', async (_event, port) => {
   } catch (e) {
     return { online: false, error: e.message };
   }
+});
+
+const aiRoutes = new Set(['/status', '/instructions', '/jobs', '/history']);
+ipcMain.handle('ai:request', async (_event, request) => {
+  const { method, route, payload, token, port } = request || {};
+  const p = Number(port || 3002);
+  if (!Number.isInteger(p) || p < 1 || p > 65535 || !String(token || '').trim()) {
+    throw new Error('Valid admin port and token required.');
+  }
+  const validBase = aiRoutes.has(route);
+  const jobRun = /^\/jobs\/[a-f0-9-]{36}\/run$/.test(route || '');
+  const jobDelete = /^\/jobs\/[a-f0-9-]{36}$/.test(route || '');
+  const valid = (method === 'GET' && validBase) ||
+    (method === 'PUT' && route === '/instructions') ||
+    (method === 'POST' && (route === '/jobs' || jobRun)) ||
+    (method === 'DELETE' && jobDelete);
+  if (!valid) throw new Error('Unsupported AI dashboard operation.');
+  let res;
+  try {
+    res = await fetch('http://127.0.0.1:' + p + '/api' + route, {
+      method,
+      headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+      ...(payload ? { body: JSON.stringify(payload) } : {}),
+      signal: AbortSignal.timeout(method === 'POST' && jobRun ? 600000 : 8000)
+    });
+  } catch (error) {
+    throw new Error('Cannot reach standalone AI service: ' + error.message);
+  }
+  const output = await res.json();
+  if (!res.ok) throw new Error(output.error || 'AI service responded with ' + res.status);
+  return output;
 });
