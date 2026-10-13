@@ -57,7 +57,8 @@ const defaultSettings = {
     enabled: true,
     authtoken: '',
     domain: ''
-  }
+  },
+  sources: []
 };
 
 function settingsPath() {
@@ -82,11 +83,75 @@ function decrypt(value) {
   }
 }
 
+
+function sanitizeProfile(source) {
+  const p = source || {};
+  // Only public metadata and names go into the Electron profile store.
+  return {
+    id: String(p.id || '').trim(),
+    name: String(p.name || '').trim(),
+    type: p.type === 'access' ? 'access' : 'mysql',
+    host: String(p.host || '127.0.0.1').trim(),
+    port: Number(p.port || 3306),
+    database: String(p.database || '').trim(),
+    user: String(p.user || '').trim(),
+    file: String(p.file || '').trim(),
+    allowedTables: Array.isArray(p.allowedTables) ? p.allowedTables.map(String) : []
+  };
+}
+
+function exportSourceSettings(settings) {
+  const profiles = (settings.sources || []).map(sanitizeProfile);
+  if (!profiles.length) throw new Error('Add one or more sources first.');
+  const ids = new Set();
+  const secretNames = new Set();
+  const sources = profiles.map(profile => {
+    if (!/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(profile.id) || ids.has(profile.id)) {
+      throw new Error('Each source must have a unique valid ID.');
+    }
+    ids.add(profile.id);
+    if (profile.type === 'access') {
+      if (!/\.(mdb|accdb)$/i.test(profile.file)) throw new Error('Access requires a .mdb or .accdb file.');
+      return { id: profile.id, name: profile.name || profile.id,
+        type: 'access', file: profile.file, allowedTables: profile.allowedTables };
+    }
+    if (!profile.host || !profile.user || !profile.database ||
+        !Number.isInteger(profile.port) || profile.port < 1 || profile.port > 65535) {
+      throw new Error('MySQL needs host, port, database and a SELECT-only user.');
+    }
+    const name = 'MCP_' + profile.id.toUpperCase().replace(/[^A-Z0-9]/g, '_') + '_PASSWORD';
+    if (secretNames.has(name)) throw new Error('Conflicting password environment variable names.');
+    secretNames.add(name);
+    return {
+      id: profile.id, name: profile.name || profile.id, type: 'mysql',
+      mysql: {
+        host: profile.host, port: profile.port, database: profile.database, user: profile.user,
+        password: String.fromCharCode(36) + '{' + name + '}',
+        collation: 'utf8mb4', tlsMode: 'off', allowTlsFallback: false
+      },
+      allowedTables: profile.allowedTables
+    };
+  });
+  return {
+    sources,
+    mcp: {
+      port: Number(settings.mcp?.port || 3001), accessMode: 'read',
+      bearerToken: String.fromCharCode(36) + '{MCP_BEARER_TOKEN}',
+      selectLimit: Math.min(5000, Math.max(1, Number(settings.mcp?.selectLimit || 200))),
+      queryTimeoutMs: Number(settings.mcp?.queryTimeoutMs || 30000),
+      blockMultipleStatements: true, blockFileAccess: true,
+      allowSlowFunctions: false, enableExecuteSql: false, jsonResponses: true
+    },
+    ngrok: { enabled: false }
+  };
+}
+
 function mergeSettings(base, incoming) {
   return {
     mysql: { ...base.mysql, ...(incoming.mysql || {}) },
     mcp: { ...base.mcp, ...(incoming.mcp || {}) },
-    ngrok: { ...base.ngrok, ...(incoming.ngrok || {}) }
+    ngrok: { ...base.ngrok, ...(incoming.ngrok || {}) },
+    sources: Array.isArray(incoming.sources) ? incoming.sources.map(sanitizeProfile) : []
   };
 }
 
@@ -183,7 +248,8 @@ ipcMain.handle('bridge:start', async () => {
   if (bridgeController) return bridgeController.status();
   const mod = await getBridgeModule();
   const settings = loadStoredSettings();
-  bridgeController = await mod.startBridge(settings, {
+  // Existing Electron Start MCP remains the legacy single-source server.
+  bridgeController = await mod.startBridge({ ...settings, sources: undefined }, {
     onLog: (entry) => send('bridge:log', entry),
     onStatus: (status) => send('bridge:status', status),
     onApproval: (approval) => send('bridge:approval', approval)
@@ -208,4 +274,27 @@ ipcMain.handle('sql:run', async (_event, sql) => {
   const mod = await getBridgeModule();
   const settings = loadStoredSettings();
   return mod.runLocalSql(settings, sql);
+});
+
+ipcMain.handle('standalone:export', (_event, settings) => {
+  const content = exportSourceSettings(settings);
+  const destination = path.join(app.getPath('userData'), 'standalone');
+  fs.mkdirSync(destination, { recursive: true });
+  const output = path.join(destination, 'standalone.json');
+  fs.writeFileSync(output, JSON.stringify(content, null, 2) + '\n', { mode: 0o600 });
+  return { path: output, count: content.sources.length };
+});
+
+ipcMain.handle('standalone:status', async (_event, port) => {
+  const p = Number(port || 3001);
+  if (!Number.isInteger(p) || p < 1 || p > 65535) return { online: false, error: 'Invalid port.' };
+  try {
+    const response = await fetch('http://127.0.0.1:' + p + '/health', { signal: AbortSignal.timeout(2200) });
+    if (!response.ok) return { online: false, error: 'HTTP ' + response.status };
+    const data = await response.json();
+    return { online: data.ok === true && data.service === 'database-mcp-bridge',
+      sources: data.sources || [], service: data.service };
+  } catch (e) {
+    return { online: false, error: e.message };
+  }
 });

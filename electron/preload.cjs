@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld('bridgeAPI', {
   stopBridge: () => ipcRenderer.invoke('bridge:stop'),
   getStatus: () => ipcRenderer.invoke('bridge:status'),
   runSql: (sql) => ipcRenderer.invoke('sql:run', sql),
+  checkStandalone: (port) => ipcRenderer.invoke('standalone:status', port),
+  exportStandalone: (settings) => ipcRenderer.invoke('standalone:export', settings),
   listApprovals: () => ipcRenderer.invoke('approvals:list'),
   decideApproval: (id, approved) => ipcRenderer.invoke('approvals:decide', { id, approved }),
   onLog: (callback) => {

@@ -18,7 +18,8 @@ const empty = {
     enableExecuteSql: false, jsonResponses: true, allowedHosts: [],
     allowedOrigins: [], bearerToken: ''
   },
-  ngrok: { enabled: true, authtoken: '', domain: '' }
+  ngrok: { enabled: true, authtoken: '', domain: '' },
+  sources: []
 };
 
 const COLLATIONS = [
@@ -63,6 +64,8 @@ export default function App() {
   const [sql, setSql] = useState('SELECT VERSION() AS version;');
   const [sqlResult, setSqlResult] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [standaloneStatus, setStandaloneStatus] = useState(null);
+  const [exportInfo, setExportInfo] = useState(null);
 
   useEffect(() => {
     api.getSettings().then(setSettings);
@@ -79,6 +82,33 @@ export default function App() {
   }, []);
 
   const set = (section, key, value) => setSettings(prev => ({ ...prev, [section]: { ...prev[section], [key]: value } }));
+
+
+  const addSource = type => setSettings(prev => ({
+    ...prev,
+    sources: [...(prev.sources || []), {
+      id: type + '_' + (prev.sources || []).length,
+      name: '', type, host: '127.0.0.1', port: 3306, database: '', user: '', file: '', allowedTables: []
+    }]
+  }));
+  const editSource = (index, field, value) => setSettings(prev => ({
+    ...prev, sources: (prev.sources || []).map((p, i) => i === index ? { ...p, [field]: value } : p)
+  }));
+  const removeSource = index => setSettings(prev => ({
+    ...prev, sources: (prev.sources || []).filter((_, i) => i !== index)
+  }));
+  async function checkService() {
+    setStandaloneStatus(await api.checkStandalone(settings.mcp.port));
+  }
+  async function exportSources() {
+    setBusy(true); setExportInfo(null);
+    try {
+      const output = await api.exportStandalone(settings);
+      setExportInfo(output);
+      setNotice('Read-only service configuration exported; restart service to apply.');
+    } catch (e) { setNotice('Export failed: ' + e.message); }
+    finally { setBusy(false); }
+  }
 
   async function save() {
     setBusy(true); setNotice('');
@@ -144,7 +174,7 @@ export default function App() {
 
     <nav>
       {[
-        ['connection', 'Connection'], ['mcp', 'MCP + ngrok'], ['security', 'Security'], ['console', 'SQL Console'], ['approvals', 'Approvals'], ['logs', 'Logs']
+        ['connection', 'Connection'], ['sources', 'Standalone Sources'], ['mcp', 'MCP + ngrok'], ['security', 'Security'], ['console', 'SQL Console'], ['approvals', 'Approvals'], ['logs', 'Logs']
       ].map(([id, label]) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>
         {label}{id === 'approvals' && pending ? ` (${pending})` : ''}
       </button>)}
@@ -242,6 +272,54 @@ export default function App() {
           </>}
           {warnings.length > 0 && <div className="tags">{warnings.map(w => <span className="tag" key={w.id}>{w.message}</span>)}</div>}
         </div>}
+      </section>}
+
+
+      {tab === 'sources' && <section className="panel">
+        <h2>Read-only MySQL and Access sources</h2>
+        <p className="hint">Configure independent database sources for the standalone Node.js service. The desktop application does not store their passwords and closing it will not stop the service.</p>
+        <div className="actions">
+          <button onClick={() => addSource('mysql')}>+ MySQL</button>
+          <button onClick={() => addSource('access')}>+ Access MDB / ACCDB</button>
+          <button onClick={checkService}>Check independent service</button>
+        </div>
+        {standaloneStatus && <div className="statusbox">
+          <Row label="Service" value={standaloneStatus.online ? 'ONLINE (standalone)' : 'OFFLINE / different service'} />
+          <Row label="Source count" value={String(standaloneStatus.sources?.length || 0)} />
+          {standaloneStatus.error && <Row label="Info" value={standaloneStatus.error} />}
+          {(standaloneStatus.sources || []).map(s => <Row key={s.id} label={s.name} value={s.type} />)}
+        </div>}
+        {(settings.sources || []).map((p, i) => <div className="panel" key={i}>
+          <div className="titleRow">
+            <h3>{p.name || p.id || 'New source'} — {p.type}</h3>
+            <button className="danger" onClick={() => removeSource(i)}>Remove</button>
+          </div>
+          <div className="grid two">
+            <Field label="Unique source ID"><input value={p.id} onChange={e => editSource(i, 'id', e.target.value)} /></Field>
+            <Field label="Display name"><input value={p.name} onChange={e => editSource(i, 'name', e.target.value)} /></Field>
+          </div>
+          {p.type === 'mysql' ? <div className="grid two">
+            <Field label="Host / IP"><input value={p.host} onChange={e => editSource(i, 'host', e.target.value)} /></Field>
+            <Field label="Port"><input type="number" value={p.port} onChange={e => editSource(i, 'port', Number(e.target.value))} /></Field>
+            <Field label="Database"><input value={p.database} onChange={e => editSource(i, 'database', e.target.value)} /></Field>
+            <Field label="SELECT-only MySQL user"><input value={p.user} onChange={e => editSource(i, 'user', e.target.value)} /></Field>
+          </div> : <Field label="MDB / ACCDB file (use a consistent snapshot)">
+            <input value={p.file} onChange={e => editSource(i, 'file', e.target.value)} />
+          </Field>}
+          <Field label="Allowed tables, comma separated (blank means all)">
+            <textarea rows="2" value={(p.allowedTables || []).join(', ')}
+              onChange={e => editSource(i, 'allowedTables', splitList(e.target.value))} />
+          </Field>
+        </div>)}
+        <div className="actions">
+          <button onClick={save} disabled={busy}>Save profiles</button>
+          <button className="primary" onClick={exportSources} disabled={busy}>Export standalone.json</button>
+        </div>
+        {exportInfo && <div className="statusbox">
+          <Row label="Configuration file" value={exportInfo.path} copy />
+          <Row label="Exported source count" value={String(exportInfo.count)} />
+        </div>}
+        <p className="hint">Export contains environment-variable placeholders for MySQL passwords and the MCP bearer token. Set these variables for the Windows service account, then start/restart the separate server. It is not started by this button.</p>
       </section>}
 
       {tab === 'mcp' && <section className="panel">
