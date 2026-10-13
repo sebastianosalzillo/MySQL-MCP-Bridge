@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { spawn as nodeSpawn } from 'node:child_process';
+import { runAiProvider, configureWorkspaces, workspaceFiles } from './providers.mjs';
 
 export const DEFAULT_INSTRUCTIONS = [
   '# Database AI — istruzioni aziendali',
@@ -14,6 +14,7 @@ export const DEFAULT_INSTRUCTIONS = [
 ].join('\n');
 
 const FREQUENCIES = new Set(['hourly', 'daily', 'weekly']);
+const PROVIDERS = new Set(['opencode', 'claude', 'codex']);
 
 function writeAtomic(file, value) {
   const directory = path.dirname(file);
@@ -45,8 +46,11 @@ export function validateJob(value, previous = null) {
   if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(at)) throw new Error('Time must be HH:mm.');
   const weekday = Number(value.weekday ?? 1);
   if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6) throw new Error('Weekday must be 0-6.');
+  const provider = String(value.provider || 'opencode');
+  if (!PROVIDERS.has(provider)) throw new Error('Provider must be opencode, claude or codex.');
   return {
-    id, name, prompt, frequency, at, weekday, enabled: value.enabled === true,
+    id, name, prompt, frequency, at, weekday, provider,
+    includeInstructions: value.includeInstructions !== false, enabled: value.enabled === true,
     lastRunKey: previous?.lastRunKey || null
   };
 }
@@ -73,88 +77,7 @@ export function dueKey(job, local) {
   return local.date;
 }
 
-export function workspaceFiles(settings) {
-  const workspace = path.join(path.resolve(settings.stateDir), 'workspace');
-  return {
-    workspace,
-    instructions: path.join(workspace, 'AGENTS.md'),
-    config: path.join(workspace, 'opencode.json')
-  };
-}
-
-export function configureWorkspace(settings, instructions) {
-  const paths = workspaceFiles(settings);
-  const endpointPort = Number(settings.mcpPort);
-  if (!Number.isInteger(endpointPort) || endpointPort < 1 || endpointPort > 65535) {
-    throw new Error('Invalid MCP endpoint port.');
-  }
-  fs.mkdirSync(paths.workspace, { recursive: true });
-  // The generated workspace is owned by this feature; no user workspaces are overwritten.
-  const config = {
-    $schema: 'https://opencode.ai/config.json',
-    permission: {
-      '*': 'deny', read: 'allow', 'database_bridge_*': 'allow'
-    },
-    mcp: {
-      database_bridge: {
-        type: 'remote',
-        url: 'http://127.0.0.1:' + endpointPort + '/mcp',
-        enabled: true,
-        oauth: false,
-        headers: { Authorization: 'Bearer {env:MCP_BEARER_TOKEN}' }
-      }
-    }
-  };
-  writeAtomic(paths.instructions, instructions.endsWith('\n') ? instructions : instructions + '\n');
-  writeAtomic(paths.config, JSON.stringify(config, null, 2) + '\n');
-  return paths;
-}
-
-export function runOpenCode(job, settings, { spawn = nodeSpawn } = {}) {
-  const workspace = workspaceFiles(settings).workspace;
-  const executable = settings.executable || 'opencode';
-  if (/[^\w .:/\\-]/.test(executable) || /\.(cmd|bat|ps1)$/i.test(executable)) {
-    throw new Error('Use a native OpenCode executable, not a shell script.');
-  }
-  const maxMs = Math.min(1800000, Math.max(10000, Number(settings.runTimeoutMs || 300000)));
-  return new Promise((resolve, reject) => {
-    const child = spawn(executable, ['run', '--dir', workspace, job.prompt], {
-      cwd: workspace, shell: false, windowsHide: true,
-      env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe']
-    });
-    let out = '';
-    let err = '';
-    let completed = false;
-    const maxBytes = 2 * 1024 * 1024;
-    const finalize = (error, data) => {
-      if (completed) return;
-      completed = true;
-      clearTimeout(timer);
-      if (error) reject(error);
-      else resolve(data);
-    };
-    const timer = setTimeout(() => {
-      child.kill();
-      finalize(new Error('OpenCode execution timed out.'));
-    }, maxMs);
-    child.stdout.on('data', data => {
-      out += data.toString();
-      if (Buffer.byteLength(out) > maxBytes) {
-        child.kill();
-        finalize(new Error('OpenCode output exceeded 2 MB.'));
-      }
-    });
-    child.stderr.on('data', data => {
-      err += data.toString().slice(0, 4000);
-      if (err.length > 16000) err = err.slice(-16000);
-    });
-    child.on('error', () => finalize(new Error('Cannot launch OpenCode. Install the CLI and configure the executable path.')));
-    child.on('close', code => {
-      if (code === 0) finalize(null, { output: out.trim(), diagnostics: err.slice(-2000) });
-      else finalize(new Error('OpenCode exited with code ' + code + '. ' + err.slice(-500)));
-    });
-  });
-}
+export { workspaceFiles, configureWorkspaces } from './providers.mjs';
 
 export function createAutomationManager(config, dependencies = {}) {
   const settings = {
@@ -164,13 +87,11 @@ export function createAutomationManager(config, dependencies = {}) {
   };
   new Intl.DateTimeFormat('en-US', { timeZone: settings.timeZone }); // validate
   const now = dependencies.now || (() => new Date());
-  const run = dependencies.run || runOpenCode;
+  const run = dependencies.run || runAiProvider;
   const jobsFile = path.join(settings.stateDir, 'jobs.json');
   const instructionFile = path.join(settings.stateDir, 'instructions.md');
-  const runDirectory = path.join(settings.stateDir, 'runs');
   const reportDirectory = path.join(settings.stateDir, 'reports');
   fs.mkdirSync(settings.stateDir, { recursive: true });
-  fs.mkdirSync(runDirectory, { recursive: true });
   fs.mkdirSync(reportDirectory, { recursive: true });
 
   let jobs = readJson(jobsFile, { jobs: [] }).jobs.map(p => validateJob(p, p));
@@ -180,17 +101,19 @@ export function createAutomationManager(config, dependencies = {}) {
   let closed = false;
   let timer = null;
   const history = readJson(path.join(settings.stateDir, 'history.json'), { runs: [] }).runs;
-  configureWorkspace(settings, instructions);
+  configureWorkspaces(settings, instructions);
   const saveJobs = () => writeAtomic(jobsFile, JSON.stringify({ jobs }, null, 2));
   const saveHistory = () => writeAtomic(path.join(settings.stateDir, 'history.json'), JSON.stringify({ runs: history.slice(0, 100) }, null, 2));
 
-  const getInstructions = () => ({ instructions, workspace: workspaceFiles(settings).workspace });
+  const getInstructions = () => ({ instructions,
+    workspaceWithInstructions: workspaceFiles(settings, true).workspace,
+    workspaceWithoutInstructions: workspaceFiles(settings, false).workspace });
 
   function setInstructions(value) {
     const content = String(value || '').trim();
     if (!content || content.length > 30000) throw new Error('Instructions must be 1-30000 characters.');
     // Update managed workspace before acknowledging success.
-    configureWorkspace(settings, content);
+    configureWorkspaces(settings, content);
     writeAtomic(instructionFile, content + '\n');
     instructions = content;
     return getInstructions();
@@ -215,7 +138,10 @@ export function createAutomationManager(config, dependencies = {}) {
   function listHistory() { return history.slice(0, 40).map(r => ({ ...r })); }
   function status() {
     return { enabled: !closed, running: busy, activeJob,
-      jobs: jobs.length, workspace: workspaceFiles(settings).workspace, timeZone: settings.timeZone };
+      jobs: jobs.length, workspaces: {
+        withInstructions: workspaceFiles(settings, true).workspace,
+        withoutInstructions: workspaceFiles(settings, false).workspace
+      }, timeZone: settings.timeZone };
   }
 
   async function execute(job, key, trigger) {
@@ -224,7 +150,8 @@ export function createAutomationManager(config, dependencies = {}) {
     busy = true; activeJob = job.id;
     const start = now().toISOString();
     const entry = { id: randomUUID(), jobId: job.id, jobName: job.name,
-      trigger, startedAt: start, status: 'running' };
+      trigger, startedAt: start, provider: job.provider,
+      includeInstructions: job.includeInstructions, status: 'running' };
     try {
       // A task always uses the current persistent instructions in the shared workspace.
       const result = await run(job, settings);
@@ -277,5 +204,6 @@ export function createAutomationManager(config, dependencies = {}) {
     // The running child is allowed to finish; the service wrapper should have a graceful stop window.
   }
   return { getInstructions, setInstructions, listJobs, upsertJob, deleteJob,
-    listHistory, status, runNow, tick, start, stop, _workspace: workspaceFiles(settings) };
+    listHistory, status, runNow, tick, start, stop,
+    _workspace: workspaceFiles(settings, true) };
 }
