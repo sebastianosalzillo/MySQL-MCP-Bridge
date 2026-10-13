@@ -72,7 +72,7 @@ export function configureWorkspaces(settings, instructions) {
       mcpServers: {
         database_bridge: {
           type: 'http', url,
-          headers: { Authorization: 'Bearer ' + ' }
+          headers: { Authorization: 'Bearer ' + String.fromCharCode(36, 123) + 'MCP_BEARER_TOKEN' + String.fromCharCode(125) }
         }
       }
     }, null, 2) + '\n');
