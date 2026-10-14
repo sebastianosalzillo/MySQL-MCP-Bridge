@@ -31,3 +31,12 @@ export function mcpAllowedConnections({ port, publicBase = '', hosts = [], origi
   }
   return { allowedHosts: [...allowedHosts], allowedOrigins: [...allowedOrigins] };
 }
+
+/** Explicit transport-independent Host/Origin check (SDK validation remains enabled). */
+export function validMcpRequestHeaders(req, { allowedHosts, allowedOrigins }) {
+  const host = req.headers?.host;
+  const origin = req.headers?.origin;
+  if (!host || typeof host !== 'string' || !allowedHosts.includes(host)) return false;
+  if (origin !== undefined && (!origin || !allowedOrigins.includes(origin))) return false;
+  return true;
+}

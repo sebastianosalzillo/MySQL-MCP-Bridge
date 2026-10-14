@@ -9,7 +9,7 @@ import { ApprovalManager } from './approvalManager.mjs';
 import { registerTools } from './tools.mjs';
 import { compatibilityWarnings, describeVersion } from './mysqlVersion.mjs';
 import { validateFreeSql } from './security.mjs';
-import { mcpAllowedConnections } from './mcpSecurity.mjs';
+import { mcpAllowedConnections, validMcpRequestHeaders } from './mcpSecurity.mjs';
 
 export { testConnection as testMySql };
 
@@ -127,6 +127,9 @@ export async function startBridge(settings, hooks = {}) {
         origins: settings.mcp?.allowedOrigins || []
       });
 
+      if (!validMcpRequestHeaders(req, { allowedHosts, allowedOrigins })) {
+        return res.status(403).json({ error: 'Forbidden: invalid Host or Origin header.' });
+      }
       const server = new McpServer(SERVER_INFO, { capabilities: { logging: {} } });
       registerTools(server, { pool, settings, approvals, log, capabilities, serverVersion, tlsMode });
 

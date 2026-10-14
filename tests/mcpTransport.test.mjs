@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
-import { mcpAllowedConnections } from '../server/mcpSecurity.mjs';
+import http from 'node:http';
+import { mcpAllowedConnections, validMcpRequestHeaders } from '../server/mcpSecurity.mjs';
 import { startMultiBridge } from '../server/multiBridge.mjs';
 
 async function freePort() {
@@ -33,6 +34,13 @@ test('allowlist includes exact Host-with-port without trusting unrelated hosts',
   assert.ok(!allowedHosts.includes('*'));
   assert.ok(!allowedOrigins.includes('*'));
   assert.ok(!allowedHosts.includes('evil.example'));
+  assert.equal(validMcpRequestHeaders({ headers: { host: '127.0.0.1:3001' } },
+    { allowedHosts, allowedOrigins }), true);
+  assert.equal(validMcpRequestHeaders({ headers: { host: 'evil.example:3001' } },
+    { allowedHosts, allowedOrigins }), false);
+  assert.equal(validMcpRequestHeaders({ headers: {
+    host: 'localhost:3001', origin: 'https://evil.example'
+  } }, { allowedHosts, allowedOrigins }), false);
   assert.throws(() => mcpAllowedConnections({ port: 0 }), /Invalid/);
   const withTunnel = mcpAllowedConnections({ port: 3001, publicBase: 'https://company.ngrok.app' });
   assert.ok(withTunnel.allowedHosts.includes('company.ngrok.app'));
@@ -72,8 +80,23 @@ test('actual streamable HTTP POST handshake accepts local Host with port and rej
   const withoutToken = await fetch(url, options({ Authorization: 'Bearer not-the-token' }));
   assert.equal(withoutToken.status, 401);
 
-  const invalidHost = await fetch(url, options({ Host: 'evil.example:3001' }));
-  assert.equal(invalidHost.status, 403, 'DNS rebinding protection must remain enabled');
+  const invalidHostStatus = await new Promise((resolve, reject) => {
+    const request = http.request({
+      hostname: '127.0.0.1', port, method: 'POST', path: '/mcp',
+      headers: {
+        Host: 'evil.example:3001',
+        Authorization: 'Bearer ' + token,
+        Accept: 'application/json, text/event-stream',
+        'Content-Type': 'application/json'
+      }
+    }, response => {
+      response.resume();
+      response.on('end', () => resolve(response.statusCode));
+    });
+    request.on('error', reject);
+    request.end(initialize);
+  });
+  assert.equal(invalidHostStatus, 403, 'DNS rebinding protection must remain enabled');
 
   const invalidOrigin = await fetch(url, options({ Origin: 'https://evil.example' }));
   assert.equal(invalidOrigin.status, 403, 'cross-site Origin requests must remain blocked');

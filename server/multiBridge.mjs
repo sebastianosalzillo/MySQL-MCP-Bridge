@@ -5,7 +5,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createSourceRegistry } from './sourceRegistry.mjs';
 import { registerMultiTools } from './multiTools.mjs';
-import { mcpAllowedConnections } from './mcpSecurity.mjs';
+import { mcpAllowedConnections, validMcpRequestHeaders } from './mcpSecurity.mjs';
 
 const SERVER_INFO = { name: 'database-mcp-bridge', version: '0.2.0' };
 const localClient = request => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress);
@@ -34,6 +34,9 @@ export async function startMultiBridge(settings, hooks = {}) {
     const { allowedHosts, allowedOrigins } = mcpAllowedConnections({
       port, publicBase: externalUrl
     });
+    if (!validMcpRequestHeaders(req, { allowedHosts, allowedOrigins })) {
+      return res.status(403).json({ error: 'Forbidden: invalid Host or Origin header.' });
+    }
     const server = new McpServer(SERVER_INFO);
     registerMultiTools(server, registry);
     const transport = new StreamableHTTPServerTransport({
