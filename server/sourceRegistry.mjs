@@ -1,6 +1,7 @@
 import { connectWithFallback, queryWithTimeout } from './mysqlManager.mjs';
 import { assertTableAllowed, buildWhere, quoteId, qualifiedTable, validateFreeSql } from './security.mjs';
 import { runAccess } from './access/runner.mjs';
+import { executeFileSource } from './fileSources.mjs';
 
 function limitFor(settings, requested) {
   const cap = Math.min(5000, Math.max(1, Number(settings.mcp?.selectLimit || 200)));
@@ -61,6 +62,10 @@ export function createSourceRegistry(settings, deps = {}) {
 
   async function execute(sourceId, operation, args = {}) {
     const source = findSource(sourceId);
+    if (source.type === 'filesystem') return executeFileSource(source, operation, args);
+    if (['list_directory', 'get_file_info', 'read_text_file', 'read_document', 'search_files', 'search_text'].includes(operation)) {
+      throw new Error('This operation requires a filesystem source.');
+    }
     const max = limitFor(settings, args.limit);
     const offset = safeOffset(args.offset);
     if (operation === 'list_tables') {

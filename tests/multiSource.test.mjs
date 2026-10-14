@@ -30,7 +30,7 @@ test('MCP multi-source exports read tools only', () => {
   registerMultiTools({ registerTool: (name) => names.push(name) }, {
     listSources: () => [], execute: async () => []
   });
-  assert.deepEqual(names.sort(), ['describe_table', 'list_sources', 'list_tables', 'read_query', 'select_rows']);
+  assert.deepEqual(names.sort(), ['describe_table', 'get_file_info', 'list_directory', 'list_sources', 'list_tables', 'read_document', 'read_query', 'read_text_file', 'search_files', 'search_text', 'select_rows']);
 });
 
 test('MySQL pools connect lazily and query their own configured host and port', async () => {

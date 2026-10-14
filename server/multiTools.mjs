@@ -15,7 +15,7 @@ export function registerMultiTools(server, registry) {
     }
   );
 
-  tool('list_sources', 'List configured read-only MySQL and Access connections.', {},
+  tool('list_sources', 'List configured read-only MySQL, Access and filesystem sources.', {},
     () => registry.listSources());
 
   tool('list_tables', 'List authorized tables in one configured source.', {
@@ -41,4 +41,29 @@ export function registerMultiTools(server, registry) {
     source_id: z.string(), sql: z.string(), values: z.array(z.any()).optional(),
     limit: z.number().int().positive().optional()
   }, ({ source_id, ...args }) => registry.execute(source_id, 'read_query', args));
+  tool('list_directory', 'List files and folders under an authorized folder source.', {
+    source_id: z.string(), path: z.string().optional(), limit: z.number().int().positive().optional()
+  }, ({ source_id, ...args }) => registry.execute(source_id, 'list_directory', args));
+
+  tool('get_file_info', 'Read file or directory metadata without modifying it.', {
+    source_id: z.string(), path: z.string()
+  }, ({ source_id, ...args }) => registry.execute(source_id, 'get_file_info', args));
+
+  tool('read_text_file', 'Read bounded plain text from an authorized folder. Binary files are blocked.', {
+    source_id: z.string(), path: z.string(), max_chars: z.number().int().positive().optional()
+  }, ({ source_id, ...args }) => registry.execute(source_id, 'read_text_file', args));
+
+  tool('read_document', 'Read bounded extracted text from PDF, Word DOCX or Excel XLSX in an authorized folder. Scanned PDFs require separate OCR.', {
+    source_id: z.string(), path: z.string(), max_chars: z.number().int().positive().optional()
+  }, ({ source_id, ...args }) => registry.execute(source_id, 'read_document', args));
+
+  tool('search_files', 'Search files by name in an authorized folder (bounded depth and results).', {
+    source_id: z.string(), path: z.string().optional(), name: z.string().optional(),
+    max_depth: z.number().int().nonnegative().optional()
+  }, ({ source_id, ...args }) => registry.execute(source_id, 'search_files', args));
+
+  tool('search_text', 'Find text in authorized text files, PDF, DOCX and XLSX with safe limits.', {
+    source_id: z.string(), query: z.string(), path: z.string().optional(),
+    name: z.string().optional(), max_depth: z.number().int().nonnegative().optional()
+  }, ({ source_id, ...args }) => registry.execute(source_id, 'search_text', args));
 }

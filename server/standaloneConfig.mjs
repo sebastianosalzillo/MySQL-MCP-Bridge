@@ -32,11 +32,16 @@ export function validateStandaloneSettings(settings) {
       }
       if (ids.has(source.id)) throw new Error(`Duplicate source id: ${source.id}`);
       ids.add(source.id);
-      if (!['mysql', 'access'].includes(source.type)) {
+      if (!['mysql', 'access', 'filesystem'].includes(source.type)) {
         throw new Error(`Unsupported database type for ${source.id}`);
       }
       if (source.type === 'mysql' && (!source.mysql?.user || !source.mysql?.database)) {
         throw new Error(`MySQL source ${source.id} requires mysql.user and mysql.database.`);
+      }
+      if (source.type === 'filesystem' &&
+          (!source.rootPath || typeof source.rootPath !== 'string' ||
+           !(path.isAbsolute(source.rootPath) || path.win32.isAbsolute(source.rootPath)))) {
+        throw new Error('Filesystem source ' + source.id + ' requires an absolute rootPath.');
       }
       if (source.type === 'access' && !/\.((mdb)|(accdb))$/i.test(source.file || '')) {
         throw new Error(`Access source ${source.id} needs a .mdb or .accdb file.`);
