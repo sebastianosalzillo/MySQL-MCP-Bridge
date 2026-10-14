@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('bridgeAPI', {
   aiRequest: (request) => ipcRenderer.invoke('ai:request', request),
   exportStandalone: (settings) => ipcRenderer.invoke('standalone:export', settings),
   importProjectSources: () => ipcRenderer.invoke('standalone:import-project'),
+  chooseFolder: () => ipcRenderer.invoke('standalone:choose-folder'),
+  testFolder: path => ipcRenderer.invoke('standalone:test-folder', path),
   testSource: profile => ipcRenderer.invoke('standalone:test-source', profile),
   startManagedStandalone: settings => ipcRenderer.invoke('standalone:managed-start', settings),
   stopManagedStandalone: () => ipcRenderer.invoke('standalone:managed-stop'),

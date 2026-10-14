@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, safeStorage, dialog } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -92,12 +92,14 @@ function sanitizeProfile(source) {
   return {
     id: String(p.id || '').trim(),
     name: String(p.name || '').trim(),
-    type: p.type === 'access' ? 'access' : 'mysql',
+    type: ['mysql', 'access', 'filesystem'].includes(p.type) ? p.type : 'mysql',
     host: String(p.host || '127.0.0.1').trim(),
     port: Number(p.port || 3306),
     database: String(p.database || '').trim(),
     user: String(p.user || '').trim(),
     file: String(p.file || '').trim(),
+    rootPath: String(p.rootPath || '').trim(),
+    enabled: p.enabled !== false,
     allowedTables: Array.isArray(p.allowedTables) ? p.allowedTables.map(String) : [],
     password: String(p.password || ''),
     passwordSaved: Boolean(p.passwordSaved)
@@ -105,7 +107,7 @@ function sanitizeProfile(source) {
 }
 
 function exportSourceSettings(settings) {
-  const profiles = (settings.sources || []).map(sanitizeProfile);
+  const profiles = (settings.sources || []).map(sanitizeProfile).filter(p => p.enabled);
   if (!profiles.length) throw new Error('Add one or more sources first.');
   const ids = new Set();
   const secretNames = new Set();
@@ -114,6 +116,15 @@ function exportSourceSettings(settings) {
       throw new Error('Each source must have a unique valid ID.');
     }
     ids.add(profile.id);
+    if (profile.type === 'filesystem') {
+      if (!profile.rootPath || !(path.isAbsolute(profile.rootPath) || path.win32.isAbsolute(profile.rootPath))) {
+        throw new Error('Folder source ' + profile.id + ' needs an absolute Windows path or UNC share.');
+      }
+      return {
+        id: profile.id, name: profile.name || profile.id,
+        type: 'filesystem', rootPath: profile.rootPath
+      };
+    }
     if (profile.type === 'access') {
       if (!/\.(mdb|accdb)$/i.test(profile.file)) throw new Error('Access requires a .mdb or .accdb file.');
       return { id: profile.id, name: profile.name || profile.id,
@@ -378,6 +389,26 @@ ipcMain.handle('standalone:admin-access', () => ({
   token: decrypt(existingSettingsFile().aiAdminTokenEncrypted || '')
 }));
 
+ipcMain.handle('standalone:choose-folder', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Choose a read-only MCP folder',
+    properties: ['openDirectory']
+  });
+  return result.canceled ? '' : result.filePaths[0] || '';
+});
+
+ipcMain.handle('standalone:test-folder', async (_event, folder) => {
+  const root = String(folder || '');
+  if (!(path.isAbsolute(root) || path.win32.isAbsolute(root))) {
+    throw new Error('Enter an absolute folder path, such as S:\\ or \\\\SERVER\\Share.');
+  }
+  const real = await fs.promises.realpath(root);
+  const info = await fs.promises.stat(real);
+  if (!info.isDirectory()) throw new Error('The path is not a directory.');
+  await fs.promises.readdir(real);
+  return { ok: true, path: root };
+});
+
 ipcMain.handle('standalone:test-source', async (_event, profile) => {
   const selected = sanitizeProfile(profile);
   if (selected.type !== 'mysql') throw new Error('Only MySQL sources need a connection test.');
@@ -406,7 +437,9 @@ ipcMain.handle('standalone:import-project', () => {
     id: s.id, name: s.name, type: s.type,
     ...(s.type === 'access'
       ? { file: s.file }
-      : { host: s.mysql?.host, port: s.mysql?.port, database: s.mysql?.database, user: s.mysql?.user }),
+      : s.type === 'filesystem'
+        ? { rootPath: s.rootPath }
+        : { host: s.mysql?.host, port: s.mysql?.port, database: s.mysql?.database, user: s.mysql?.user }),
     allowedTables: s.allowedTables
   }));
   return { sources, count: sources.length };
