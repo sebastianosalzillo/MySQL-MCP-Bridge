@@ -65,6 +65,7 @@ export default function App() {
   const [sqlResult, setSqlResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [standaloneStatus, setStandaloneStatus] = useState(null);
+  const [managed, setManaged] = useState({ running: false });
   const [exportInfo, setExportInfo] = useState(null);
   const [aiPort, setAiPort] = useState(3002);
   const [aiToken, setAiToken] = useState('');
@@ -79,16 +80,23 @@ export default function App() {
 
   useEffect(() => {
     api.getSettings().then(setSettings);
+    api.managedStandaloneStatus().then(setManaged);
+    api.managedAdminAccess().then(access => { if (access.token) { setAiToken(access.token); setAiPort(access.port); } });
     api.getStatus().then(setStatus);
     api.listApprovals().then(setApprovals);
     const offLog = api.onLog(entry => setLogs(prev => [entry, ...prev].slice(0, 500)));
     const offStatus = api.onStatus(setStatus);
+    const offManaged = api.onManagedStatus(setManaged);
+    const offManagedLog = api.onManagedLog(entry => setLogs(prev => [{
+      time: entry.time || new Date().toISOString(),
+      type: entry.type || 'standalone', data: entry.data || { message: entry.message || '' }
+    }, ...prev].slice(0, 500)));
     const offApproval = api.onApproval(item => {
       setApprovals(prev => [item, ...prev.filter(x => x.id !== item.id)]);
       setTab('approvals');
     });
     const timer = setInterval(() => api.listApprovals().then(setApprovals), 2500);
-    return () => { offLog(); offStatus(); offApproval(); clearInterval(timer); };
+    return () => { offLog(); offStatus(); offManaged(); offManagedLog(); offApproval(); clearInterval(timer); };
   }, []);
 
   const set = (section, key, value) => setSettings(prev => ({ ...prev, [section]: { ...prev[section], [key]: value } }));
@@ -98,7 +106,7 @@ export default function App() {
     ...prev,
     sources: [...(prev.sources || []), {
       id: type + '_' + (prev.sources || []).length,
-      name: '', type, host: '127.0.0.1', port: 3306, database: '', user: '', file: '', allowedTables: []
+      name: '', type, host: '127.0.0.1', port: 3306, database: '', user: '', password: '', passwordSaved: false, file: '', allowedTables: []
     }]
   }));
   const editSource = (index, field, value) => setSettings(prev => ({
@@ -107,6 +115,43 @@ export default function App() {
   const removeSource = index => setSettings(prev => ({
     ...prev, sources: (prev.sources || []).filter((_, i) => i !== index)
   }));
+  async function importProject() {
+    setBusy(true);
+    try {
+      const result = await api.importProjectSources();
+      setSettings(prev => ({ ...prev, sources: result.sources }));
+      setNotice('Imported ' + result.count + ' source profiles. Enter each MySQL password, then Save & start.');
+    } catch (error) { setNotice('Import failed: ' + error.message); }
+    finally { setBusy(false); }
+  }
+  async function testStandaloneSource(source) {
+    setBusy(true); setNotice('');
+    try {
+      const result = await api.testSource(source);
+      setNotice(source.id + ' connected to MySQL ' + result.versionLabel + ' (' + result.tableCount + ' tables).');
+    } catch (error) { setNotice(source.id + ' connection failed: ' + error.message); }
+    finally { setBusy(false); }
+  }
+  async function startManagedStandalone() {
+    setBusy(true); setNotice('');
+    try {
+      const info = await api.startManagedStandalone(settings);
+      setManaged(info);
+      setSettings(await api.getSettings());
+      const access = await api.managedAdminAccess();
+      if (access.token) setAiToken(access.token);
+      setNotice('Standalone MCP online. MySQL passwords and Bearer Token are stored securely.');
+    } catch (error) {
+      setNotice('Standalone startup failed: ' + error.message + (String(error.message).includes('EADDRINUSE')
+        ? ' Stop the old PowerShell server with Ctrl+C first.' : ''));
+    } finally { setBusy(false); }
+  }
+  async function stopManagedStandalone() {
+    setBusy(true);
+    try { setManaged(await api.stopManagedStandalone()); setNotice('Standalone MCP stopped.'); }
+    catch (error) { setNotice('Stop failed: ' + error.message); }
+    finally { setBusy(false); }
+  }
   async function checkService() {
     setStandaloneStatus(await api.checkStandalone(settings.mcp.port));
   }
@@ -177,7 +222,7 @@ export default function App() {
 
   async function save() {
     setBusy(true); setNotice('');
-    try { const saved = await api.saveSettings(settings); setSettings(saved); setNotice('Settings saved.'); }
+    try { const saved = await api.saveSettings(settings); setSettings(saved); setNotice('Settings saved securely.'); }
     catch (e) { setNotice(`Error: ${e.message}`); }
     finally { setBusy(false); }
   }
@@ -234,7 +279,7 @@ export default function App() {
         <p>Expose a MySQL server to MCP clients through a local endpoint and an optional ngrok tunnel.</p>
         </div>
       </div>
-      <div className={`badge ${status.running ? 'online' : ''}`}>{status.running ? 'ONLINE' : 'OFFLINE'}</div>
+      <div className={`badge ${status.running || managed.running ? 'online' : ''}`}>{status.running || managed.running ? 'ONLINE' : 'OFFLINE'}</div>
     </header>
 
     <nav>
@@ -342,10 +387,11 @@ export default function App() {
 
       {tab === 'sources' && <section className="panel">
         <h2>Read-only MySQL and Access sources</h2>
-        <p className="hint">Configure independent database sources for the standalone Node.js service. The desktop application does not store their passwords and closing it will not stop the service.</p>
+        <p className="hint">Configure your read-only databases here. The MySQL passwords and fixed MCP Bearer Token are encrypted with Windows DPAPI. Click Save &amp; start to run the local MCP service from Electron, without PowerShell. The server stops when Electron closes.</p>
         <div className="actions">
           <button onClick={() => addSource('mysql')}>+ MySQL</button>
           <button onClick={() => addSource('access')}>+ Access MDB / ACCDB</button>
+          <button onClick={importProject} disabled={busy}>Import config/standalone.json</button>
           <button onClick={checkService}>Check independent service</button>
         </div>
         {standaloneStatus && <div className="statusbox">
@@ -354,6 +400,11 @@ export default function App() {
           {standaloneStatus.error && <Row label="Info" value={standaloneStatus.error} />}
           {(standaloneStatus.sources || []).map(s => <Row key={s.id} label={s.name} value={s.type} />)}
         </div>}
+        <div className="statusbox">
+          <Row label="Electron-managed MCP" value={managed.running ? 'ONLINE' : 'OFFLINE'} />
+          <Row label="Endpoint" value={managed.mcpUrl || 'http://127.0.0.1:' + settings.mcp.port + '/mcp'} copy />
+          <Row label="Mode" value="READ ONLY" />
+        </div>
         {(settings.sources || []).map((p, i) => <div className="panel" key={i}>
           <div className="titleRow">
             <h3>{p.name || p.id || 'New source'} — {p.type}</h3>
@@ -368,6 +419,13 @@ export default function App() {
             <Field label="Port"><input type="number" value={p.port} onChange={e => editSource(i, 'port', Number(e.target.value))} /></Field>
             <Field label="Database"><input value={p.database} onChange={e => editSource(i, 'database', e.target.value)} /></Field>
             <Field label="SELECT-only MySQL user"><input value={p.user} onChange={e => editSource(i, 'user', e.target.value)} /></Field>
+            <Field label="MySQL password (encrypted on Save)" hint={p.passwordSaved ? 'Password already saved securely. Leave empty to keep it.' : 'Enter the MySQL password for this user.'}>
+              <input type="password" autoComplete="new-password" value={p.password || ''} placeholder={p.passwordSaved ? 'Saved securely' : 'Enter password'}
+                onChange={e => editSource(i, 'password', e.target.value)} />
+            </Field>
+            <div className="actions">
+              <button onClick={() => testStandaloneSource(p)} disabled={busy}>Test MySQL connection</button>
+            </div>
           </div> : <Field label="MDB / ACCDB file (use a consistent snapshot)">
             <input value={p.file} onChange={e => editSource(i, 'file', e.target.value)} />
           </Field>}
@@ -377,14 +435,17 @@ export default function App() {
           </Field>
         </div>)}
         <div className="actions">
-          <button onClick={save} disabled={busy}>Save profiles</button>
-          <button className="primary" onClick={exportSources} disabled={busy}>Export standalone.json</button>
+          <button onClick={save} disabled={busy}>Save profiles + secrets</button>
+          {!managed.running
+            ? <button className="primary" onClick={startManagedStandalone} disabled={busy}>Save &amp; start MCP</button>
+            : <button className="danger" onClick={stopManagedStandalone} disabled={busy}>Stop standalone MCP</button>}
+          <button onClick={exportSources} disabled={busy}>Export config for external service</button>
         </div>
         {exportInfo && <div className="statusbox">
           <Row label="Configuration file" value={exportInfo.path} copy />
           <Row label="Exported source count" value={String(exportInfo.count)} />
         </div>}
-        <p className="hint">Export contains environment-variable placeholders for MySQL passwords and the MCP bearer token. Set these variables for the Windows service account, then start/restart the separate server. It is not started by this button.</p>
+        <p className="hint">Use the Save &amp; start button for normal operation. Export is optional and only for a separate Node.js service; it uses environment variables instead of the encrypted Electron credentials. If port 3001 is already in use, stop the old PowerShell server before starting here.</p>
       </section>}
 
 
@@ -393,7 +454,7 @@ export default function App() {
         <p className="hint">Shared project instructions can be ON or OFF per task. Supports OpenCode, Claude Code and Codex when their CLIs and MCP configuration are installed on the service machine. Admin access stays on 127.0.0.1, separate from ngrok/MCP.</p>
         <div className="grid two">
           <Field label="Local AI admin port"><input type="number" value={aiPort} onChange={e => setAiPort(Number(e.target.value))} /></Field>
-          <Field label="Admin token (not saved)"><input type="password" value={aiToken} onChange={e => setAiToken(e.target.value)} /></Field>
+          <Field label="AI admin token (automatically available for Electron-managed server)"><input type="password" value={aiToken} onChange={e => setAiToken(e.target.value)} /></Field>
         </div>
         <div className="actions"><button onClick={refreshAi} disabled={busy}>Connect / Refresh</button></div>
         {aiStatus && <>
@@ -469,7 +530,15 @@ export default function App() {
           <Field label="Fixed ngrok domain"><input value={settings.ngrok.domain} onChange={e => set('ngrok', 'domain', e.target.value)} placeholder="example.ngrok-free.app (optional)" /></Field>
         </div>
         <Check checked={settings.ngrok.enabled} onChange={v => set('ngrok', 'enabled', v)} label="Publish the MCP endpoint through ngrok" />
-        <Field label="Optional MCP bearer token"><input type="password" value={settings.mcp.bearerToken} onChange={e => set('mcp', 'bearerToken', e.target.value)} placeholder="leave empty if the client cannot send an Authorization header" /></Field>
+        <Field label="Fixed MCP Bearer Token (stored encrypted)" hint="Used by the managed server. Save once and it stays unchanged across restarts. If empty on the first Save, the Windows MCP_BEARER_TOKEN is reused when available; otherwise a secure token is generated. OpenCode must use the same token.">
+          <input type="password" autoComplete="new-password" value={settings.mcp.bearerToken} onChange={e => set('mcp', 'bearerToken', e.target.value)}
+            placeholder="Save once to generate a persistent token" />
+        </Field>
+        <div className="actions">
+          <button onClick={save} disabled={busy}>Save fixed Bearer Token</button>
+          <button onClick={() => navigator.clipboard.writeText(settings.mcp.bearerToken)}
+            disabled={!settings.mcp.bearerToken}>Copy Bearer Token</button>
+        </div>
         <details className="advanced">
           <summary>Advanced</summary>
           <Check checked={settings.mcp.jsonResponses} onChange={v => set('mcp', 'jsonResponses', v)} label="Answer with application/json instead of an SSE stream (expected by most remote MCP clients)" />
