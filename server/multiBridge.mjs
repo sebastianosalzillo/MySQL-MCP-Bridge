@@ -5,6 +5,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createSourceRegistry } from './sourceRegistry.mjs';
 import { registerMultiTools } from './multiTools.mjs';
+import { mcpAllowedConnections } from './mcpSecurity.mjs';
 
 const SERVER_INFO = { name: 'database-mcp-bridge', version: '0.2.0' };
 const localClient = request => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress);
@@ -30,20 +31,17 @@ export async function startMultiBridge(settings, hooks = {}) {
     if (token && req.get('authorization') !== 'Bearer ' + token) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
-    const hosts = ['127.0.0.1', 'localhost', '[::1]'];
-    const origins = ['http://127.0.0.1', 'http://localhost'];
-    if (externalUrl) {
-      hosts.push(new URL(externalUrl).host);
-      origins.push(externalUrl);
-    }
+    const { allowedHosts, allowedOrigins } = mcpAllowedConnections({
+      port, publicBase: externalUrl
+    });
     const server = new McpServer(SERVER_INFO);
     registerMultiTools(server, registry);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: settings.mcp.jsonResponses !== false,
       enableDnsRebindingProtection: true,
-      allowedHosts: hosts,
-      allowedOrigins: origins
+      allowedHosts,
+      allowedOrigins
     });
     try {
       await server.connect(transport);
