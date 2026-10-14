@@ -302,6 +302,10 @@ MIT.
 
 Passwords, bearer tokens and the AI scheduler admin token are encrypted with Electron safeStorage (Windows DPAPI) in the current user's app data directory. They are **not** written in plaintext to standalone.json. The export button continues to emit only environment placeholders for separately managed external services. The Electron-managed server uses READ ONLY tools and ngrok OFF. It stops when Electron closes, so use the separately managed standalone/Windows service if it must run while Electron is closed. When port 3001 is already taken by the old standalone server, stop that process before starting the managed server.
 
+## Read-only shared folders and documents
+
+Electron can authorize Windows network shares and local folders for MCP browsing, searching and reading PDF, Word DOCX and Excel XLSX. See [the shared-folders guide](docs/readonly-file-sources.md) for setup, limits and commands.
+
 ## Standalone Windows service (preview)
 
 Run this MCP bridge without Electron using `npm run start:server -- --config config/standalone.json`. See [Windows standalone setup](docs/standalone-windows.md). The desktop app continues to work independently; remote Electron management is not yet implemented.
