@@ -106,7 +106,8 @@ export default function App() {
     ...prev,
     sources: [...(prev.sources || []), {
       id: type + '_' + (prev.sources || []).length,
-      name: '', type, host: '127.0.0.1', port: 3306, database: '', user: '', password: '', passwordSaved: false, file: '', allowedTables: []
+      name: '', type, host: '127.0.0.1', port: 3306, database: '', user: '', password: '', passwordSaved: false,
+      file: '', rootPath: '', enabled: true, allowedTables: []
     }]
   }));
   const editSource = (index, field, value) => setSettings(prev => ({
@@ -122,6 +123,20 @@ export default function App() {
       setSettings(prev => ({ ...prev, sources: result.sources }));
       setNotice('Imported ' + result.count + ' source profiles. Enter each MySQL password, then Save & start.');
     } catch (error) { setNotice('Import failed: ' + error.message); }
+    finally { setBusy(false); }
+  }
+  async function chooseSourceFolder(index) {
+    try {
+      const selected = await api.chooseFolder();
+      if (selected) editSource(index, 'rootPath', selected);
+    } catch (error) { setNotice('Folder selection failed: ' + error.message); }
+  }
+  async function testFolderSource(source) {
+    setBusy(true); setNotice('');
+    try {
+      const result = await api.testFolder(source.rootPath);
+      setNotice('Folder is accessible read-only: ' + result.path);
+    } catch (error) { setNotice('Folder access failed: ' + error.message); }
     finally { setBusy(false); }
   }
   async function testStandaloneSource(source) {
@@ -386,11 +401,12 @@ export default function App() {
 
 
       {tab === 'sources' && <section className="panel">
-        <h2>Read-only MySQL and Access sources</h2>
+        <h2>Read-only MySQL, Access and shared folder sources</h2>
         <p className="hint">Configure your read-only databases here. The MySQL passwords and fixed MCP Bearer Token are encrypted with Windows DPAPI. Click Save &amp; start to run the local MCP service from Electron, without PowerShell. The server stops when Electron closes.</p>
         <div className="actions">
           <button onClick={() => addSource('mysql')}>+ MySQL</button>
           <button onClick={() => addSource('access')}>+ Access MDB / ACCDB</button>
+          <button onClick={() => addSource('filesystem')}>+ Folder / network drive</button>
           <button onClick={importProject} disabled={busy}>Import config/standalone.json</button>
           <button onClick={checkService}>Check independent service</button>
         </div>
@@ -408,6 +424,7 @@ export default function App() {
         {(settings.sources || []).map((p, i) => <div className="panel" key={i}>
           <div className="titleRow">
             <h3>{p.name || p.id || 'New source'} — {p.type}</h3>
+            <Check checked={p.enabled !== false} onChange={v => editSource(i, 'enabled', v)} label="Enabled" />
             <button className="danger" onClick={() => removeSource(i)}>Remove</button>
           </div>
           <div className="grid two">
@@ -426,13 +443,22 @@ export default function App() {
             <div className="actions">
               <button onClick={() => testStandaloneSource(p)} disabled={busy}>Test MySQL connection</button>
             </div>
-          </div> : <Field label="MDB / ACCDB file (use a consistent snapshot)">
+          </div> : p.type === 'filesystem' ? <>
+            <Field label="Authorized folder / mapped drive / UNC share" hint="Examples: S:\\ or M:\\ or \\\\SERVER\\Shared\\Documents. OpenCode can read only inside this folder.">
+              <input value={p.rootPath || ''} placeholder="S:\\ or \\\\SERVER\\Shared" onChange={e => editSource(i, 'rootPath', e.target.value)} />
+            </Field>
+            <div className="actions">
+              <button onClick={() => chooseSourceFolder(i)} disabled={busy}>Browse folders</button>
+              <button onClick={() => testFolderSource(p)} disabled={busy}>Test folder access</button>
+            </div>
+            <p className="hint">Supports PDF (text), Word .docx, Excel .xlsx and plain text. Never exposes write, rename or delete operations. PDF scans require OCR. Old .doc/.xls are not supported in this version.</p>
+          </> : <Field label="MDB / ACCDB file (use a consistent snapshot)">
             <input value={p.file} onChange={e => editSource(i, 'file', e.target.value)} />
           </Field>}
-          <Field label="Allowed tables, comma separated (blank means all)">
+          {p.type !== 'filesystem' && <Field label="Allowed tables, comma separated (blank means all)">
             <textarea rows="2" value={(p.allowedTables || []).join(', ')}
               onChange={e => editSource(i, 'allowedTables', splitList(e.target.value))} />
-          </Field>
+          </Field>}
         </div>)}
         <div className="actions">
           <button onClick={save} disabled={busy}>Save profiles + secrets</button>
