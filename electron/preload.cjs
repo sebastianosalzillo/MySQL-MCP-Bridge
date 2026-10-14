@@ -11,6 +11,22 @@ contextBridge.exposeInMainWorld('bridgeAPI', {
   checkStandalone: (port) => ipcRenderer.invoke('standalone:status', port),
   aiRequest: (request) => ipcRenderer.invoke('ai:request', request),
   exportStandalone: (settings) => ipcRenderer.invoke('standalone:export', settings),
+  importProjectSources: () => ipcRenderer.invoke('standalone:import-project'),
+  testSource: profile => ipcRenderer.invoke('standalone:test-source', profile),
+  startManagedStandalone: settings => ipcRenderer.invoke('standalone:managed-start', settings),
+  stopManagedStandalone: () => ipcRenderer.invoke('standalone:managed-stop'),
+  managedStandaloneStatus: () => ipcRenderer.invoke('standalone:managed-status'),
+  managedAdminAccess: () => ipcRenderer.invoke('standalone:admin-access'),
+  onManagedStatus: callback => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on('standalone:managed-status', handler);
+    return () => ipcRenderer.removeListener('standalone:managed-status', handler);
+  },
+  onManagedLog: callback => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on('standalone:log', handler);
+    return () => ipcRenderer.removeListener('standalone:log', handler);
+  },
   listApprovals: () => ipcRenderer.invoke('approvals:list'),
   decideApproval: (id, approved) => ipcRenderer.invoke('approvals:decide', { id, approved }),
   onLog: (callback) => {

@@ -2,10 +2,12 @@ const { app, BrowserWindow, ipcMain, safeStorage } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
+const { randomBytes } = require('node:crypto');
 
 let mainWindow;
 let bridgeModule;
 let bridgeController;
+let managedStandalone = null;
 
 const defaultSettings = {
   mysql: {
@@ -96,7 +98,9 @@ function sanitizeProfile(source) {
     database: String(p.database || '').trim(),
     user: String(p.user || '').trim(),
     file: String(p.file || '').trim(),
-    allowedTables: Array.isArray(p.allowedTables) ? p.allowedTables.map(String) : []
+    allowedTables: Array.isArray(p.allowedTables) ? p.allowedTables.map(String) : [],
+    password: String(p.password || ''),
+    passwordSaved: Boolean(p.passwordSaved)
   };
 }
 
@@ -163,33 +167,66 @@ function mergeSettings(base, incoming) {
   };
 }
 
-function loadStoredSettings() {
-  const file = settingsPath();
-  if (!fs.existsSync(file)) return structuredClone(defaultSettings);
-  try {
-    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
-    const merged = mergeSettings(defaultSettings, raw);
-    merged.mysql.password = decrypt(raw.mysql?.passwordEncrypted || '');
-    merged.ngrok.authtoken = decrypt(raw.ngrok?.authtokenEncrypted || '');
-    merged.mcp.bearerToken = decrypt(raw.mcp?.bearerTokenEncrypted || '');
-    return merged;
-  } catch {
-    return structuredClone(defaultSettings);
-  }
+function existingSettingsFile() {
+  try { return JSON.parse(fs.readFileSync(settingsPath(), 'utf8')); }
+  catch { return {}; }
+}
+
+function loadStoredSettings(publicView = false) {
+  const raw = existingSettingsFile();
+  const merged = mergeSettings(defaultSettings, raw);
+  merged.mysql.password = decrypt(raw.mysql?.passwordEncrypted || '');
+  merged.ngrok.authtoken = decrypt(raw.ngrok?.authtokenEncrypted || '');
+  merged.mcp.bearerToken = decrypt(raw.mcp?.bearerTokenEncrypted || '');
+  merged.sources = merged.sources.map(profile => {
+    const saved = (raw.sources || []).find(item => item.id === profile.id);
+    const password = decrypt(saved?.passwordEncrypted || '');
+    return {
+      ...profile,
+      password: publicView ? '' : password,
+      passwordSaved: Boolean(password)
+    };
+  });
+  return merged;
 }
 
 function saveStoredSettings(settings) {
+  const previous = existingSettingsFile();
   const merged = mergeSettings(defaultSettings, settings);
+  // Keep the original Bearer identity unless the user explicitly replaces it.
+  // On first save, reuse the existing Windows token so OpenCode stays compatible.
+  merged.mcp.bearerToken = merged.mcp.bearerToken ||
+    decrypt(previous.mcp?.bearerTokenEncrypted || '') ||
+    process.env.MCP_BEARER_TOKEN || randomBytes(32).toString('hex');
   const serializable = structuredClone(merged);
   serializable.mysql.passwordEncrypted = encrypt(merged.mysql.password || '');
   serializable.ngrok.authtokenEncrypted = encrypt(merged.ngrok.authtoken || '');
-  serializable.mcp.bearerTokenEncrypted = encrypt(merged.mcp.bearerToken || '');
+  serializable.mcp.bearerTokenEncrypted = encrypt(merged.mcp.bearerToken);
+  serializable.aiAdminTokenEncrypted = previous.aiAdminTokenEncrypted ||
+    encrypt(randomBytes(32).toString('hex'));
   delete serializable.mysql.password;
   delete serializable.ngrok.authtoken;
   delete serializable.mcp.bearerToken;
+  serializable.sources = merged.sources.map(profile => {
+    const prior = (previous.sources || []).find(item => item.id === profile.id);
+    const encrypted = profile.password
+      ? encrypt(profile.password)
+      : (prior?.passwordEncrypted || '');
+    const publicProfile = sanitizeProfile(profile);
+    delete publicProfile.password;
+    delete publicProfile.passwordSaved;
+    return { ...publicProfile, passwordEncrypted: encrypted };
+  });
   fs.mkdirSync(path.dirname(settingsPath()), { recursive: true });
-  fs.writeFileSync(settingsPath(), JSON.stringify(serializable, null, 2), 'utf8');
-  return merged;
+  // Write a complete temporary file first, preventing a truncated settings.json.
+  const temp = settingsPath() + '.tmp';
+  try {
+    fs.writeFileSync(temp, JSON.stringify(serializable, null, 2), { mode: 0o600 });
+    fs.renameSync(temp, settingsPath());
+  } finally {
+    if (fs.existsSync(temp)) fs.unlinkSync(temp);
+  }
+  return loadStoredSettings(true);
 }
 
 async function getBridgeModule() {
@@ -236,15 +273,19 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', async (event) => {
-  if (bridgeController) {
+  if (bridgeController || managedStandalone) {
     event.preventDefault();
-    try { await bridgeController.stop(); } catch { /* stopping on the way out anyway */ }
+    try {
+      if (managedStandalone) await managedStandalone.shutdown('Electron closing');
+      if (bridgeController) await bridgeController.stop();
+    } catch { /* shutdown on exit is best effort */ }
+    managedStandalone = null;
     bridgeController = null;
     app.exit(0);
   }
 });
 
-ipcMain.handle('settings:get', () => loadStoredSettings());
+ipcMain.handle('settings:get', () => loadStoredSettings(true));
 ipcMain.handle('settings:save', (_event, settings) => saveStoredSettings(settings));
 
 ipcMain.handle('mysql:test', async (_event, settings) => {
@@ -282,6 +323,93 @@ ipcMain.handle('sql:run', async (_event, sql) => {
   const mod = await getBridgeModule();
   const settings = loadStoredSettings();
   return mod.runLocalSql(settings, sql);
+});
+
+
+function managedStatus() {
+  return managedStandalone?.controller?.status() || { running: false };
+}
+
+ipcMain.handle('standalone:managed-status', () => managedStatus());
+
+ipcMain.handle('standalone:managed-start', async (_event, settings) => {
+  if (managedStandalone) return managedStatus();
+  if (bridgeController) throw new Error('Stop the legacy MCP server before starting multi-source MCP.');
+  // Ensure a consistent encrypted source-password and Bearer-token snapshot.
+  saveStoredSettings(settings);
+  const stored = loadStoredSettings();
+  const exportConfig = exportSourceSettings(stored);
+  const adminToken = decrypt(existingSettingsFile().aiAdminTokenEncrypted);
+  const { managedStandaloneSettings } = await import(
+    pathToFileURL(path.join(__dirname, '..', 'server', 'managedSettings.mjs')).href
+  );
+  const runtimeConfig = managedStandaloneSettings(
+    exportConfig, stored, adminToken, path.join(app.getPath('userData'), 'ai')
+  );
+  const { runStandalone } = await import(
+    pathToFileURL(path.join(__dirname, '..', 'server', 'standalone.mjs')).href
+  );
+  managedStandalone = await runStandalone({
+    loadedSettings: runtimeConfig,
+    log: item => {
+      try { send('standalone:log', JSON.parse(item)); }
+      catch { send('standalone:log', { type: 'status', message: String(item) }); }
+    },
+    error: error => send('standalone:log', { type: 'error', message: String(error) })
+  });
+  const status = managedStatus();
+  send('standalone:managed-status', status);
+  return status;
+});
+
+ipcMain.handle('standalone:managed-stop', async () => {
+  if (managedStandalone) {
+    const running = managedStandalone;
+    managedStandalone = null;
+    await running.shutdown('Electron stop');
+  }
+  const status = managedStatus();
+  send('standalone:managed-status', status);
+  return status;
+});
+
+ipcMain.handle('standalone:admin-access', () => ({
+  port: 3002,
+  token: decrypt(existingSettingsFile().aiAdminTokenEncrypted || '')
+}));
+
+ipcMain.handle('standalone:test-source', async (_event, profile) => {
+  const selected = sanitizeProfile(profile);
+  if (selected.type !== 'mysql') throw new Error('Only MySQL sources need a connection test.');
+  if (!selected.host || !selected.database || !selected.user) {
+    throw new Error('Enter host, database, user and password before testing.');
+  }
+  const prior = loadStoredSettings();
+  const saved = prior.sources.find(p => p.id === selected.id);
+  const password = selected.password || saved?.password;
+  if (!password) throw new Error('Enter a MySQL password first.');
+  const mod = await getBridgeModule();
+  const result = await mod.testMySql({
+    host: selected.host, port: selected.port, database: selected.database,
+    user: selected.user, password,
+    collation: 'utf8mb4', tlsMode: 'off', allowTlsFallback: false
+  });
+  return { ok: result.ok, versionLabel: result.versionLabel, tableCount: result.tableCount };
+});
+
+ipcMain.handle('standalone:import-project', () => {
+  const filename = path.join(__dirname, '..', 'config', 'standalone.json');
+  if (!fs.existsSync(filename)) throw new Error('No config/standalone.json in this project. You can fill in the sources manually.');
+  const content = JSON.parse(fs.readFileSync(filename, 'utf8'));
+  if (!Array.isArray(content.sources)) throw new Error('The configuration contains no multi-source profiles.');
+  const sources = content.sources.map(s => sanitizeProfile({
+    id: s.id, name: s.name, type: s.type,
+    ...(s.type === 'access'
+      ? { file: s.file }
+      : { host: s.mysql?.host, port: s.mysql?.port, database: s.mysql?.database, user: s.mysql?.user }),
+    allowedTables: s.allowedTables
+  }));
+  return { sources, count: sources.length };
 });
 
 ipcMain.handle('standalone:export', (_event, settings) => {
