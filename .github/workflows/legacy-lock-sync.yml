@@ -1,0 +1,26 @@
+name: Generate temporary lockfile for legacy readers
+on:
+  push:
+    branches: [feat/standalone-headless-readonly]
+permissions:
+  contents: write
+jobs:
+  lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Resolve legacy DOC and XLS dependencies
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Commit package lock if needed
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet -- package-lock.json; then
+            git add package-lock.json
+            git commit -m "chore: lock legacy Word and Excel reader dependencies"
+            git push origin HEAD:feat/standalone-headless-readonly
+          fi
