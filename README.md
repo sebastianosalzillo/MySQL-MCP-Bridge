@@ -289,6 +289,19 @@ The bridge uses Streamable HTTP, the recommended transport for remote MCP server
 
 MIT.
 
+## Desktop: saved MySQL passwords and a fixed MCP Bearer Token
+
+**Recommended on Windows when using OpenCode Desktop on the same PC.** You can now start the multi-source read-only MCP service entirely from the Electron interface.
+
+1. Install dependencies with npm ci, then open Electron with npm run dev.
+2. Open **Standalone Sources**. Use **Import config/standalone.json** if the existing project contains a source configuration, or add a MySQL source manually.
+3. Enter its host, port, database and SELECT-only MySQL username. Enter the password once; **Test MySQL connection** verifies it directly before you start MCP. A MySQL "Access denied" means the database server itself rejected the credentials and must be corrected at the MySQL side.
+4. In **MCP + ngrok**, enter your chosen **Fixed MCP Bearer Token**, or just click **Save fixed Bearer Token** to reuse the existing MCP_BEARER_TOKEN environment variable or securely generate a token. The same token is kept over later launches until explicitly changed.
+5. Return to **Standalone Sources** and click **Save & start MCP**. Electron runs the server at http://127.0.0.1:3001/mcp without a PowerShell password prompt, environment-variable setup, or separate npm run start:server.
+6. Configure OpenCode to connect to that URL and send the same Bearer token. If you already use the environment token reference Bearer {env:MCP_BEARER_TOKEN}, its value must match the saved token; OpenCode reads environment changes only after restart.
+
+Passwords, bearer tokens and the AI scheduler admin token are encrypted with Electron safeStorage (Windows DPAPI) in the current user's app data directory. They are **not** written in plaintext to standalone.json. The export button continues to emit only environment placeholders for separately managed external services. The Electron-managed server uses READ ONLY tools and ngrok OFF. It stops when Electron closes, so use the separately managed standalone/Windows service if it must run while Electron is closed. When port 3001 is already taken by the old standalone server, stop that process before starting the managed server.
+
 ## Standalone Windows service (preview)
 
 Run this MCP bridge without Electron using `npm run start:server -- --config config/standalone.json`. See [Windows standalone setup](docs/standalone-windows.md). The desktop app continues to work independently; remote Electron management is not yet implemented.
@@ -301,7 +314,7 @@ The independent Node.js service can expose multiple sources through one MCP endp
 
 Only `list_sources`, `list_tables`, `describe_table`, `select_rows` and MySQL-only `read_query` are exposed in multi-source mode. The standalone service enforces READ ONLY and requires an authenticating bearer token when ngrok is enabled. Use SELECT-only MySQL credentials.
 
-Electron now has a **Standalone Sources** tab to edit source profiles, export a `standalone.json` with secret placeholders and inspect the local service health. Export does not restart or install the Windows service.
+Electron **Standalone Sources** now supports safely stored per-source MySQL passwords, connection testing, importing existing project profiles, and starting/stopping the managed read-only service directly. Export still creates a separate configuration with environment placeholders; it does not install or restart an independent Windows service.
 
 **Example:** [Multi-source config](config/multi-source.example.json). **Windows setup and limitations:** [Standalone documentation](docs/standalone-windows.md).
 
