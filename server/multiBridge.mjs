@@ -55,7 +55,13 @@ export async function startMultiBridge(settings, hooks = {}) {
       if (!res.headersSent) res.status(500).json({ error: 'MCP request failed' });
     }
   });
-  app.all('/mcp', (_req, res) => res.status(405).json({ error: 'Use MCP POST requests.' }));
+  app.all('/mcp', (req, res) => {
+    if (token && req.get('authorization') !== 'Bearer ' + token) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    res.set('Allow', 'POST');
+    return res.status(405).json({ error: 'Use MCP POST requests.' });
+  });
 
   const stop = async () => {
     if (!active) return;
