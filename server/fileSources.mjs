@@ -7,7 +7,7 @@ export const TEXT_EXTENSIONS = new Set([
   '.js', '.jsx', '.ts', '.tsx', '.css', '.scss', '.yaml', '.yml', '.ini', '.cfg',
   '.conf', '.sql', '.ps1', '.bat', '.cmd', '.py', '.java', '.c', '.cpp', '.h', '.cs'
 ]);
-export const DOCUMENT_EXTENSIONS = new Set(['.pdf', '.docx', '.xlsx']);
+export const DOCUMENT_EXTENSIONS = new Set(['.pdf', '.doc', '.docx', '.xls', '.xlsx']);
 const MAX_FILE_BYTES = 12 * 1024 * 1024;
 const MAX_TEXT_CHARS = 100000;
 const MAX_ENTRIES = 250;
@@ -80,6 +80,36 @@ function truncate(text, count = MAX_TEXT_CHARS) {
 
 async function extractDocument(filename, ext) {
   const data = await safeBuffer(filename);
+  if (ext === '.doc' || ext === '.xls') {
+    // Binary Office files use a Compound File Binary (OLE2) container.
+    // Reject renamed ZIPs and arbitrary input before asking a legacy parser to decode it.
+    const magic = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+    if (data.length < magic.length || !data.subarray(0, magic.length).equals(magic)) {
+      throw new Error('Invalid legacy Office document: expected an OLE2 Word .doc or Excel .xls file.');
+    }
+  }
+  if (ext === '.doc') {
+    // Parse the legacy Word binary format in-process: no Office COM automation,
+    // no launching programs and no macro execution.
+    const { default: WordExtractor } = await import('word-extractor');
+    const document = await new WordExtractor().extract(data);
+    return { format: 'doc', text: document.getBody() || '' };
+  }
+  if (ext === '.xls') {
+    // BIFF8 (Excel 97-2003); skip macros and return cell values, not formula evaluation.
+    const { readXls } = await import('xls-reader');
+    const workbook = readXls(data);
+    const lines = [];
+    for (const sheet of workbook.sheets.slice(0, 6)) {
+      lines.push('# Sheet: ' + sheet.name);
+      for (const row of sheet.rows.slice(0, 300)) {
+        const values = row.slice(0, 35).map(cell => cell == null ? '' :
+          cell instanceof Date ? cell.toISOString() : String(cell));
+        lines.push(values.join('\t'));
+      }
+    }
+    return { format: 'xls', text: lines.join('\n') };
+  }
   if (ext === '.docx') {
     const mammoth = await import('mammoth');
     const output = await mammoth.extractRawText({ buffer: data });
@@ -122,7 +152,7 @@ async function extractDocument(filename, ext) {
     }
     return { format: 'xlsx', text: lines.join('\n') };
   }
-  throw new Error('Unsupported document format; use PDF, Word .docx or Excel .xlsx.');
+  throw new Error('Unsupported document format; use PDF, Word .doc/.docx or Excel .xls/.xlsx.');
 }
 
 async function readText(rootPath, requested, maxChars) {
@@ -137,7 +167,7 @@ async function readText(rootPath, requested, maxChars) {
 async function readDocument(rootPath, requested, maxChars) {
   const file = await checkFile(rootPath, requested);
   const ext = path.extname(file.target).toLowerCase();
-  if (!DOCUMENT_EXTENSIONS.has(ext)) throw new Error('Supported documents: .pdf, .docx, .xlsx (not .doc or .xls).');
+  if (!DOCUMENT_EXTENSIONS.has(ext)) throw new Error('Supported documents: .pdf, .doc, .docx, .xls, .xlsx.');
   const output = await extractDocument(file.target, ext);
   return { path: file.relative, ...truncate(output.text, maxChars), format: output.format };
 }

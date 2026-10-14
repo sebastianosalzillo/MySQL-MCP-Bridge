@@ -53,7 +53,7 @@ export function registerMultiTools(server, registry) {
     source_id: z.string(), path: z.string(), max_chars: z.number().int().positive().optional()
   }, ({ source_id, ...args }) => registry.execute(source_id, 'read_text_file', args));
 
-  tool('read_document', 'Read bounded extracted text from PDF, Word DOCX or Excel XLSX in an authorized folder. Scanned PDFs require separate OCR.', {
+  tool('read_document', 'Read bounded extracted text from PDF, Word DOC/DOCX or Excel XLS/XLSX in an authorized folder. Scanned PDFs require separate OCR.', {
     source_id: z.string(), path: z.string(), max_chars: z.number().int().positive().optional()
   }, ({ source_id, ...args }) => registry.execute(source_id, 'read_document', args));
 

@@ -24,7 +24,7 @@ Le lettere dei dischi mappati a volte non sono disponibili per servizi Windows e
 | list_directory | Elenca file e sottocartelle |
 | get_file_info | Legge dimensioni, tipo e data di modifica |
 | read_text_file | Legge TXT, CSV, JSON, SQL, log e codice |
-| read_document | Estrae testo da PDF, Word DOCX, Excel XLSX |
+| read_document | Estrae testo da PDF, Word DOC/DOCX, Excel XLS/XLSX |
 | search_files | Cerca file per nome |
 | search_text | Cerca testo dentro file supportati |
 
@@ -33,10 +33,10 @@ Ogni comando relativo ai file utilizza source_id e un path relativo alla cartell
 ## Formati e limiti
 
 - PDF: testo selezionabile, prime 40 pagine; i PDF con sole scansioni richiedono OCR.
-- Word: DOCX, estrazione del testo dei paragrafi.
-- Excel: XLSX, primi 6 fogli, fino a 300 righe e 35 colonne per foglio; usa il valore memorizzato delle formule.
+- Word: DOCX e DOC binario tradizionale, estrazione del testo dei paragrafi; eventuali macro non vengono eseguite.
+- Excel: XLSX e XLS binario BIFF8 (Excel 97-2003), primi 6 fogli, fino a 300 righe e 35 colonne per foglio; valori memorizzati delle formule, nessuna esecuzione di macro.
 - File di testo: TXT, CSV, JSON, XML, SQL, MD, LOG e formati di codice comuni.
-- DOC e XLS legacy, file protetti da password e OCR non sono ancora supportati.
+- File protetti da password, vecchi XLS BIFF2/BIFF5 (antecedenti a Excel 97), OCR e oggetti incorporati non sono supportati. I documenti DOC particolarmente vecchi o danneggiati possono non essere leggibili.
 - Dimensione massima per file 12 MiB; risposta massima 100000 caratteri, elenchi massimo 250 elementi, ricerca limitata a profondità e numero di file.
 
 ## Sicurezza

@@ -451,7 +451,7 @@ export default function App() {
               <button onClick={() => chooseSourceFolder(i)} disabled={busy}>Browse folders</button>
               <button onClick={() => testFolderSource(p)} disabled={busy}>Test folder access</button>
             </div>
-            <p className="hint">Supports PDF (text), Word .docx, Excel .xlsx and plain text. Never exposes write, rename or delete operations. PDF scans require OCR. Old .doc/.xls are not supported in this version.</p>
+            <p className="hint">Supports PDF (text), Word .doc/.docx, Excel .xls/.xlsx and plain text. Read-only: no write, rename or delete. Legacy .xls supports Excel 97-2003 (BIFF8); scanned PDFs require OCR.</p>
           </> : <Field label="MDB / ACCDB file (use a consistent snapshot)">
             <input value={p.file} onChange={e => editSource(i, 'file', e.target.value)} />
           </Field>}
