@@ -26,8 +26,8 @@ export async function startMultiBridge(settings, hooks = {}) {
   if (lanInterface && token.length < 24) {
     throw new Error('LAN access requires a fixed Bearer Token of at least 24 characters.');
   }
-  const { allowedHosts, allowedOrigins } = mcpAllowedConnections({
-    port,
+  const allowedConnections = () => mcpAllowedConnections({
+    port, publicBase: externalUrl,
     hosts: lanInterface ? [lanInterface.address, lanInterface.address + ':' + port] : []
   });
   const emit = (type, data) => hooks.onLog?.({ time: new Date().toISOString(), type, data });
@@ -37,7 +37,7 @@ export async function startMultiBridge(settings, hooks = {}) {
     if (!isLanPeerAllowed(req.socket?.remoteAddress, lanInterface)) {
       return res.status(403).json({ error: 'This client is not on the permitted local subnet.' });
     }
-    if (!validMcpRequestHeaders(req, { allowedHosts, allowedOrigins })) {
+    if (!validMcpRequestHeaders(req, allowedConnections())) {
       return res.status(403).json({ error: 'Forbidden: invalid Host or Origin header.' });
     }
     next();
@@ -45,15 +45,14 @@ export async function startMultiBridge(settings, hooks = {}) {
 
   app.get('/health', (req, res) => {
     if (!localClient(req)) return res.status(404).end();
-    return res.json(localClient(req)
-    ? { ok: active, service: SERVER_INFO.name, sources: registry.listSources() }
-    : { ok: active, service: SERVER_INFO.name });
+    return res.json({ ok: active, service: SERVER_INFO.name, sources: registry.listSources() });
   });
 
   app.post('/mcp', async (req, res) => {
     if (token && req.get('authorization') !== 'Bearer ' + token) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
+    const { allowedHosts, allowedOrigins } = allowedConnections();
     const server = new McpServer(SERVER_INFO);
     registerMultiTools(server, registry);
     const transport = new StreamableHTTPServerTransport({
