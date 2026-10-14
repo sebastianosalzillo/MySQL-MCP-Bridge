@@ -1,11 +1,10 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { configurationPath, loadStandaloneSettings } from './standaloneConfig.mjs';
+import { configurationPath, loadStandaloneSettings, validateStandaloneSettings } from './standaloneConfig.mjs';
 
 /** Run the current MCP engine in Node.js, without Electron. */
-export async function runStandalone({ args = process.argv.slice(2), env = process.env, log = console.log, error = console.error, processRef = process, start = null } = {}) {
-  const filename = configurationPath(args, env);
-  const settings = loadStandaloneSettings(filename, env);
+export async function runStandalone({ args = process.argv.slice(2), env = process.env, log = console.log, error = console.error, processRef = process, start = null, loadedSettings = null } = {}) {
+  const settings = loadedSettings ? validateStandaloneSettings(loadedSettings) : loadStandaloneSettings(configurationPath(args, env), env);
   const startEngine = start || (await import('./mcpBridge.mjs')).startBridge;
   const controller = await startEngine(settings, {
     onLog: entry => log(JSON.stringify(entry)),
