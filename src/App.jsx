@@ -16,9 +16,10 @@ const empty = {
     allowSlowFunctions: false, requireWhereForUpdateDelete: true,
     confirmUpdate: true, confirmDelete: true, confirmDdl: true,
     enableExecuteSql: false, jsonResponses: true, allowedHosts: [],
-    allowedOrigins: [], bearerToken: ''
+    allowedOrigins: [], bearerToken: '', lan: { enabled: false, host: '' }
   },
-  ngrok: { enabled: true, authtoken: '', domain: '' }
+  ngrok: { enabled: true, authtoken: '', domain: '' },
+  sources: []
 };
 
 const COLLATIONS = [
@@ -63,26 +64,194 @@ export default function App() {
   const [sql, setSql] = useState('SELECT VERSION() AS version;');
   const [sqlResult, setSqlResult] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [standaloneStatus, setStandaloneStatus] = useState(null);
+  const [managed, setManaged] = useState({ running: false });
+  const [lanInterfaces, setLanInterfaces] = useState([]);
+  const [exportInfo, setExportInfo] = useState(null);
+  const [aiPort, setAiPort] = useState(3002);
+  const [aiToken, setAiToken] = useState('');
+  const [aiStatus, setAiStatus] = useState(null);
+  const [aiInstructions, setAiInstructions] = useState('');
+  const [aiJobs, setAiJobs] = useState([]);
+  const [aiHistory, setAiHistory] = useState([]);
+  const [aiJob, setAiJob] = useState({
+    name: '', prompt: '', provider: 'opencode', frequency: 'daily',
+    at: '08:00', weekday: 1, enabled: false, includeInstructions: true
+  });
 
   useEffect(() => {
     api.getSettings().then(setSettings);
+    api.managedStandaloneStatus().then(setManaged);
+    api.listLanInterfaces().then(setLanInterfaces).catch(() => setLanInterfaces([]));
+    api.managedAdminAccess().then(access => { if (access.token) { setAiToken(access.token); setAiPort(access.port); } });
     api.getStatus().then(setStatus);
     api.listApprovals().then(setApprovals);
     const offLog = api.onLog(entry => setLogs(prev => [entry, ...prev].slice(0, 500)));
     const offStatus = api.onStatus(setStatus);
+    const offManaged = api.onManagedStatus(setManaged);
+    const offManagedLog = api.onManagedLog(entry => setLogs(prev => [{
+      time: entry.time || new Date().toISOString(),
+      type: entry.type || 'standalone', data: entry.data || { message: entry.message || '' }
+    }, ...prev].slice(0, 500)));
     const offApproval = api.onApproval(item => {
       setApprovals(prev => [item, ...prev.filter(x => x.id !== item.id)]);
       setTab('approvals');
     });
     const timer = setInterval(() => api.listApprovals().then(setApprovals), 2500);
-    return () => { offLog(); offStatus(); offApproval(); clearInterval(timer); };
+    return () => { offLog(); offStatus(); offManaged(); offManagedLog(); offApproval(); clearInterval(timer); };
   }, []);
 
   const set = (section, key, value) => setSettings(prev => ({ ...prev, [section]: { ...prev[section], [key]: value } }));
+  const setLan = (field, value) => setSettings(prev => ({
+    ...prev,
+    mcp: {
+      ...prev.mcp,
+      lan: {
+        enabled: false, host: '', ...(prev.mcp.lan || {}),
+        [field]: value,
+        ...(field === 'enabled' && value && !prev.mcp.lan?.host
+          ? { host: lanInterfaces[0]?.address || '' } : {})
+      }
+    }
+  }));
+
+
+  const addSource = type => setSettings(prev => ({
+    ...prev,
+    sources: [...(prev.sources || []), {
+      id: type + '_' + (prev.sources || []).length,
+      name: '', type, host: '127.0.0.1', port: 3306, database: '', user: '', password: '', passwordSaved: false,
+      file: '', rootPath: '', enabled: true, allowedTables: []
+    }]
+  }));
+  const editSource = (index, field, value) => setSettings(prev => ({
+    ...prev, sources: (prev.sources || []).map((p, i) => i === index ? { ...p, [field]: value } : p)
+  }));
+  const removeSource = index => setSettings(prev => ({
+    ...prev, sources: (prev.sources || []).filter((_, i) => i !== index)
+  }));
+  async function importProject() {
+    setBusy(true);
+    try {
+      const result = await api.importProjectSources();
+      setSettings(prev => ({ ...prev, sources: result.sources }));
+      setNotice('Imported ' + result.count + ' source profiles. Enter each MySQL password, then Save & start.');
+    } catch (error) { setNotice('Import failed: ' + error.message); }
+    finally { setBusy(false); }
+  }
+  async function chooseSourceFolder(index) {
+    try {
+      const selected = await api.chooseFolder();
+      if (selected) editSource(index, 'rootPath', selected);
+    } catch (error) { setNotice('Folder selection failed: ' + error.message); }
+  }
+  async function testFolderSource(source) {
+    setBusy(true); setNotice('');
+    try {
+      const result = await api.testFolder(source.rootPath);
+      setNotice('Folder is accessible read-only: ' + result.path);
+    } catch (error) { setNotice('Folder access failed: ' + error.message); }
+    finally { setBusy(false); }
+  }
+  async function testStandaloneSource(source) {
+    setBusy(true); setNotice('');
+    try {
+      const result = await api.testSource(source);
+      setNotice(source.id + ' connected to MySQL ' + result.versionLabel + ' (' + result.tableCount + ' tables).');
+    } catch (error) { setNotice(source.id + ' connection failed: ' + error.message); }
+    finally { setBusy(false); }
+  }
+  async function startManagedStandalone() {
+    setBusy(true); setNotice('');
+    try {
+      const info = await api.startManagedStandalone(settings);
+      setManaged(info);
+      setSettings(await api.getSettings());
+      const access = await api.managedAdminAccess();
+      if (access.token) setAiToken(access.token);
+      setNotice('Standalone MCP online. MySQL passwords and Bearer Token are stored securely.');
+    } catch (error) {
+      setNotice('Standalone startup failed: ' + error.message + (String(error.message).includes('EADDRINUSE')
+        ? ' Stop the old PowerShell server with Ctrl+C first.' : ''));
+    } finally { setBusy(false); }
+  }
+  async function stopManagedStandalone() {
+    setBusy(true);
+    try { setManaged(await api.stopManagedStandalone()); setNotice('Standalone MCP stopped.'); }
+    catch (error) { setNotice('Stop failed: ' + error.message); }
+    finally { setBusy(false); }
+  }
+  async function checkService() {
+    setStandaloneStatus(await api.checkStandalone(settings.mcp.port));
+  }
+  async function exportSources() {
+    setBusy(true); setExportInfo(null);
+    try {
+      const output = await api.exportStandalone(settings);
+      setExportInfo(output);
+      setNotice('Read-only service configuration exported; restart service to apply.');
+    } catch (e) { setNotice('Export failed: ' + e.message); }
+    finally { setBusy(false); }
+  }
+
+
+  async function aiCall(method, route, payload) {
+    return api.aiRequest({ method, route, payload, token: aiToken, port: aiPort });
+  }
+  async function refreshAi() {
+    setBusy(true);
+    try {
+      const [state, instructions, jobs, history] = await Promise.all([
+        aiCall('GET', '/status'),
+        aiCall('GET', '/instructions'),
+        aiCall('GET', '/jobs'),
+        aiCall('GET', '/history')
+      ]);
+      setAiStatus({ ...state, ...instructions });
+      setAiInstructions(instructions.instructions);
+      setAiJobs(jobs);
+      setAiHistory(history);
+      setNotice('AI service connected.');
+    } catch (error) { setNotice('AI service: ' + error.message); }
+    finally { setBusy(false); }
+  }
+  async function saveAiInstructions() {
+    setBusy(true);
+    try { await aiCall('PUT', '/instructions', { instructions: aiInstructions });
+      setNotice('Shared instructions saved.'); await refreshAi(); }
+    catch (error) { setNotice('Cannot save instructions: ' + error.message); }
+    finally { setBusy(false); }
+  }
+  async function saveAiJob() {
+    setBusy(true);
+    try {
+      await aiCall('POST', '/jobs', aiJob);
+      setAiJob({ name: '', prompt: '', provider: 'opencode', frequency: 'daily',
+        at: '08:00', weekday: 1, enabled: false, includeInstructions: true });
+      await refreshAi();
+    } catch (error) { setNotice('Cannot save task: ' + error.message); }
+    finally { setBusy(false); }
+  }
+  async function removeAiJob(id) {
+    setBusy(true);
+    try { await aiCall('DELETE', '/jobs/' + id); await refreshAi(); }
+    catch (error) { setNotice('Cannot delete task: ' + error.message); }
+    finally { setBusy(false); }
+  }
+  async function runAiJob(id) {
+    setBusy(true);
+    try {
+      const outcome = await aiCall('POST', '/jobs/' + id + '/run');
+      setNotice('AI execution: ' + outcome.status);
+      await refreshAi();
+    } catch (error) { setNotice('AI execution failed: ' + error.message); }
+    finally { setBusy(false); }
+  }
+  const setAiField = (field, value) => setAiJob(previous => ({ ...previous, [field]: value }));
 
   async function save() {
     setBusy(true); setNotice('');
-    try { const saved = await api.saveSettings(settings); setSettings(saved); setNotice('Settings saved.'); }
+    try { const saved = await api.saveSettings(settings); setSettings(saved); setNotice('Settings saved securely.'); }
     catch (e) { setNotice(`Error: ${e.message}`); }
     finally { setBusy(false); }
   }
@@ -139,12 +308,12 @@ export default function App() {
         <p>Expose a MySQL server to MCP clients through a local endpoint and an optional ngrok tunnel.</p>
         </div>
       </div>
-      <div className={`badge ${status.running ? 'online' : ''}`}>{status.running ? 'ONLINE' : 'OFFLINE'}</div>
+      <div className={`badge ${status.running || managed.running ? 'online' : ''}`}>{status.running || managed.running ? 'ONLINE' : 'OFFLINE'}</div>
     </header>
 
     <nav>
       {[
-        ['connection', 'Connection'], ['mcp', 'MCP + ngrok'], ['security', 'Security'], ['console', 'SQL Console'], ['approvals', 'Approvals'], ['logs', 'Logs']
+        ['connection', 'Connection'], ['sources', 'Standalone Sources'], ['ai', 'AI Agents + Scheduler'], ['mcp', 'MCP + ngrok'], ['security', 'Security'], ['console', 'SQL Console'], ['approvals', 'Approvals'], ['logs', 'Logs']
       ].map(([id, label]) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>
         {label}{id === 'approvals' && pending ? ` (${pending})` : ''}
       </button>)}
@@ -244,6 +413,153 @@ export default function App() {
         </div>}
       </section>}
 
+
+      {tab === 'sources' && <section className="panel">
+        <h2>Read-only MySQL, Access and shared folder sources</h2>
+        <p className="hint">Configure your read-only databases here. The MySQL passwords and fixed MCP Bearer Token are encrypted with Windows DPAPI. Click Save &amp; start to run the local MCP service from Electron, without PowerShell. The server stops when Electron closes.</p>
+        <div className="actions">
+          <button onClick={() => addSource('mysql')}>+ MySQL</button>
+          <button onClick={() => addSource('access')}>+ Access MDB / ACCDB</button>
+          <button onClick={() => addSource('filesystem')}>+ Folder / network drive</button>
+          <button onClick={importProject} disabled={busy}>Import config/standalone.json</button>
+          <button onClick={checkService}>Check independent service</button>
+        </div>
+        {standaloneStatus && <div className="statusbox">
+          <Row label="Service" value={standaloneStatus.online ? 'ONLINE (standalone)' : 'OFFLINE / different service'} />
+          <Row label="Source count" value={String(standaloneStatus.sources?.length || 0)} />
+          {standaloneStatus.error && <Row label="Info" value={standaloneStatus.error} />}
+          {(standaloneStatus.sources || []).map(s => <Row key={s.id} label={s.name} value={s.type} />)}
+        </div>}
+        <div className="statusbox">
+          <Row label="Electron-managed MCP" value={managed.running ? 'ONLINE' : 'OFFLINE'} />
+          <Row label="Endpoint" value={managed.mcpUrl || 'http://127.0.0.1:' + settings.mcp.port + '/mcp'} copy />
+          {managed.lanEnabled && <Row label="LAN endpoint" value={managed.lanUrl} copy />}
+          <Row label="Mode" value="READ ONLY" />
+        </div>
+        {(settings.sources || []).map((p, i) => <div className="panel" key={i}>
+          <div className="titleRow">
+            <h3>{p.name || p.id || 'New source'} — {p.type}</h3>
+            <Check checked={p.enabled !== false} onChange={v => editSource(i, 'enabled', v)} label="Enabled" />
+            <button className="danger" onClick={() => removeSource(i)}>Remove</button>
+          </div>
+          <div className="grid two">
+            <Field label="Unique source ID"><input value={p.id} onChange={e => editSource(i, 'id', e.target.value)} /></Field>
+            <Field label="Display name"><input value={p.name} onChange={e => editSource(i, 'name', e.target.value)} /></Field>
+          </div>
+          {p.type === 'mysql' ? <div className="grid two">
+            <Field label="Host / IP"><input value={p.host} onChange={e => editSource(i, 'host', e.target.value)} /></Field>
+            <Field label="Port"><input type="number" value={p.port} onChange={e => editSource(i, 'port', Number(e.target.value))} /></Field>
+            <Field label="Database"><input value={p.database} onChange={e => editSource(i, 'database', e.target.value)} /></Field>
+            <Field label="SELECT-only MySQL user"><input value={p.user} onChange={e => editSource(i, 'user', e.target.value)} /></Field>
+            <Field label="MySQL password (encrypted on Save)" hint={p.passwordSaved ? 'Password already saved securely. Leave empty to keep it.' : 'Enter the MySQL password for this user.'}>
+              <input type="password" autoComplete="new-password" value={p.password || ''} placeholder={p.passwordSaved ? 'Saved securely' : 'Enter password'}
+                onChange={e => editSource(i, 'password', e.target.value)} />
+            </Field>
+            <div className="actions">
+              <button onClick={() => testStandaloneSource(p)} disabled={busy}>Test MySQL connection</button>
+            </div>
+          </div> : p.type === 'filesystem' ? <>
+            <Field label="Authorized folder / mapped drive / UNC share" hint="Examples: S:\\ or M:\\ or \\\\SERVER\\Shared\\Documents. OpenCode can read only inside this folder.">
+              <input value={p.rootPath || ''} placeholder="S:\\ or \\\\SERVER\\Shared" onChange={e => editSource(i, 'rootPath', e.target.value)} />
+            </Field>
+            <div className="actions">
+              <button onClick={() => chooseSourceFolder(i)} disabled={busy}>Browse folders</button>
+              <button onClick={() => testFolderSource(p)} disabled={busy}>Test folder access</button>
+            </div>
+            <p className="hint">Supports PDF (text), Word .doc/.docx, Excel .xls/.xlsx and plain text. Read-only: no write, rename or delete. Legacy .xls supports Excel 97-2003 (BIFF8); scanned PDFs require OCR.</p>
+          </> : <Field label="MDB / ACCDB file (use a consistent snapshot)">
+            <input value={p.file} onChange={e => editSource(i, 'file', e.target.value)} />
+          </Field>}
+          {p.type !== 'filesystem' && <Field label="Allowed tables, comma separated (blank means all)">
+            <textarea rows="2" value={(p.allowedTables || []).join(', ')}
+              onChange={e => editSource(i, 'allowedTables', splitList(e.target.value))} />
+          </Field>}
+        </div>)}
+        <div className="actions">
+          <button onClick={save} disabled={busy}>Save profiles + secrets</button>
+          {!managed.running
+            ? <button className="primary" onClick={startManagedStandalone} disabled={busy}>Save &amp; start MCP</button>
+            : <button className="danger" onClick={stopManagedStandalone} disabled={busy}>Stop standalone MCP</button>}
+          <button onClick={exportSources} disabled={busy}>Export config for external service</button>
+        </div>
+        {exportInfo && <div className="statusbox">
+          <Row label="Configuration file" value={exportInfo.path} copy />
+          <Row label="Exported source count" value={String(exportInfo.count)} />
+        </div>}
+        <p className="hint">Use the Save &amp; start button for normal operation. Export is optional and only for a separate Node.js service; it uses environment variables instead of the encrypted Electron credentials. If port 3001 is already in use, stop the old PowerShell server before starting here.</p>
+      </section>}
+
+
+      {tab === 'ai' && <section className="panel">
+        <h2>AI instructions and task scheduler</h2>
+        <p className="hint">Shared project instructions can be ON or OFF per task. Supports OpenCode, Claude Code and Codex when their CLIs and MCP configuration are installed on the service machine. Admin access stays on 127.0.0.1, separate from ngrok/MCP.</p>
+        <div className="grid two">
+          <Field label="Local AI admin port"><input type="number" value={aiPort} onChange={e => setAiPort(Number(e.target.value))} /></Field>
+          <Field label="AI admin token (automatically available for Electron-managed server)"><input type="password" value={aiToken} onChange={e => setAiToken(e.target.value)} /></Field>
+        </div>
+        <div className="actions"><button onClick={refreshAi} disabled={busy}>Connect / Refresh</button></div>
+        {aiStatus && <>
+          <div className="statusbox">
+            <Row label="Scheduler" value={aiStatus.enabled ? 'Enabled' : 'Disabled'} />
+            <Row label="Active AI task" value={aiStatus.activeJob || 'None'} />
+            <Row label="Workspace WITH instructions" value={aiStatus.workspaceWithInstructions || aiStatus.workspaces?.withInstructions || ''} copy />
+            <Row label="Workspace WITHOUT instructions" value={aiStatus.workspaceWithoutInstructions || aiStatus.workspaces?.withoutInstructions || ''} copy />
+          </div>
+          <h3>Permanent instructions (optional per task)</h3>
+          <textarea className="sql" value={aiInstructions} onChange={e => setAiInstructions(e.target.value)}
+            rows={10} spellCheck="false" />
+          <div className="actions"><button className="primary" onClick={saveAiInstructions} disabled={busy}>Save shared instructions</button></div>
+          <h3>Create or edit scheduled task</h3>
+          <div className="grid two">
+            <Field label="Task name"><input value={aiJob.name} onChange={e => setAiField('name', e.target.value)} /></Field>
+            <Field label="AI engine"><Select value={aiJob.provider} onChange={v => setAiField('provider', v)}
+              options={[['opencode', 'OpenCode'], ['claude', 'Claude Code'], ['codex', 'Codex']]} /></Field>
+            <Field label="Frequency"><Select value={aiJob.frequency} onChange={v => setAiField('frequency', v)}
+              options={[['hourly', 'Every hour'], ['daily', 'Every day'], ['weekly', 'Every week']]} /></Field>
+            <Field label="Time (daily/weekly)"><input type="time" value={aiJob.at}
+              onChange={e => setAiField('at', e.target.value)} /></Field>
+          </div>
+          {aiJob.frequency === 'weekly' && <Field label="Weekday (0=Sunday, 1=Monday, ..., 6=Saturday)">
+            <Select value={String(aiJob.weekday)} onChange={v => setAiField('weekday', Number(v))}
+              options={['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((day, i) => [String(i), day])} />
+          </Field>}
+          <Field label="Task prompt">
+            <textarea className="sql" rows="5" value={aiJob.prompt} onChange={e => setAiField('prompt', e.target.value)} />
+          </Field>
+          <div className="actions">
+            <Check checked={aiJob.includeInstructions} onChange={v => setAiField('includeInstructions', v)}
+              label="Pass the permanent instructions to this task" />
+            <Check checked={aiJob.enabled} onChange={v => setAiField('enabled', v)}
+              label="Enable automatic schedule" />
+          </div>
+          <div className="actions">
+            <button className="primary" disabled={busy} onClick={saveAiJob}>{aiJob.id ? 'Update task' : 'Save task'}</button>
+            {aiJob.id && <button onClick={() => setAiJob({
+              name: '', prompt: '', provider: 'opencode', frequency: 'daily',
+              at: '08:00', weekday: 1, enabled: false, includeInstructions: true
+            })}>New task</button>}
+          </div>
+          <h3>Saved tasks</h3>
+          {!aiJobs.length && <p className="hint">No scheduled AI tasks yet.</p>}
+          {aiJobs.map(job => <div className="statusbox" key={job.id}>
+            <Row label={job.name} value={job.provider + ' | ' + job.frequency + ' | ' +
+              (job.includeInstructions ? 'Instructions ON' : 'Instructions OFF') +
+              (job.enabled ? ' | Scheduled' : ' | Paused')} />
+            <div className="actions">
+              <button onClick={() => setAiJob({ ...job })}>Edit</button>
+              <button disabled={busy} onClick={() => runAiJob(job.id)}>Run now</button>
+              <button className="danger" disabled={busy} onClick={() => removeAiJob(job.id)}>Delete</button>
+            </div>
+          </div>)}
+          <h3>Recent task history</h3>
+          {aiHistory.slice(0, 12).map(item => <div className="row" key={item.id}>
+            <span>{item.jobName} ({item.provider})</span>
+            <code>{item.status} — {item.startedAt}</code>
+          </div>)}
+          <p className="hint">Turning instructions OFF removes only dashboard-managed project instructions. The AI provider may still apply its own built-in or user-level instructions. Reports are written by the scheduler, not by the database MCP.</p>
+        </>}
+      </section>}
+
       {tab === 'mcp' && <section className="panel">
         <h2>MCP and ngrok</h2>
         <div className="grid two">
@@ -255,7 +571,57 @@ export default function App() {
           <Field label="Fixed ngrok domain"><input value={settings.ngrok.domain} onChange={e => set('ngrok', 'domain', e.target.value)} placeholder="example.ngrok-free.app (optional)" /></Field>
         </div>
         <Check checked={settings.ngrok.enabled} onChange={v => set('ngrok', 'enabled', v)} label="Publish the MCP endpoint through ngrok" />
-        <Field label="Optional MCP bearer token"><input type="password" value={settings.mcp.bearerToken} onChange={e => set('mcp', 'bearerToken', e.target.value)} placeholder="leave empty if the client cannot send an Authorization header" /></Field>
+        <h3>Accesso dalla rete locale (solo server READ ONLY)</h3>
+        <Check checked={settings.mcp.lan?.enabled === true}
+          onChange={value => setLan('enabled', value)}
+          label="Consenti accesso dalla rete locale (LAN)" />
+        <Field label="Indirizzo IP della scheda di rete del PC"
+          hint="Seleziona la rete privata a cui sono collegati gli altri PC. Localhost rimane sempre disponibile.">
+          <Select value={settings.mcp.lan?.host || ''} onChange={value => setLan('host', value)}
+            options={[['', 'Seleziona una scheda di rete'], ...lanInterfaces.map(n => [
+              n.address, n.name + ' — ' + n.address + ' / ' + n.netmask
+            ])]} />
+        </Field>
+        <div className="actions">
+          <button disabled={busy} onClick={async () => {
+            try { setLanInterfaces(await api.listLanInterfaces()); }
+            catch (error) { setNotice('Network interfaces: ' + error.message); }
+          }}>Aggiorna IP disponibili</button>
+          <button disabled={busy} onClick={save}>Salva impostazioni LAN</button>
+          <button disabled={busy || !lanInterfaces.some(n => n.address === settings.mcp.lan?.host)}
+            onClick={async () => {
+              const address = settings.mcp.lan?.host;
+              const port = Number(settings.mcp.port);
+              if (!Number.isInteger(port) || port < 1 || port > 65535) {
+                setNotice('Imposta una porta MCP valida prima di copiare il comando firewall.');
+                return;
+              }
+              const command = 'New-NetFirewallRule -DisplayName "MySQL MCP Bridge LAN ' + port +
+                '" -Direction Inbound -Action Allow -Protocol TCP -LocalAddress ' + address +
+                ' -LocalPort ' + port + ' -RemoteAddress LocalSubnet -Profile Private';
+              try {
+                await navigator.clipboard.writeText(command);
+                setNotice('Comando firewall copiato: eseguilo in PowerShell come amministratore sul PC host soltanto se necessario.');
+              } catch (error) { setNotice('Copia del comando firewall fallita: ' + error.message); }
+            }}>Copia comando Windows Firewall</button>
+        </div>
+        <p className="hint">Questa opzione vale soltanto per il server multisorgente in Standalone Sources → Save &amp; start MCP. Dopo una modifica, arresta e riavvia il server per applicarla. Richiede il Bearer Token; l'interfaccia AI amministrativa resta su 127.0.0.1:3002. Il firewall Windows potrebbe richiedere una regola sulla porta locale TCP.</p>
+        {managed.lanEnabled && <div className="statusbox">
+          <Row label="Indirizzo MCP sulla LAN" value={managed.lanUrl || '—'} copy />
+          <Row label="Sicurezza" value="READ ONLY + Bearer Token + subnet locale" />
+        </div>}
+        {settings.mcp.lan?.enabled && !managed.lanEnabled && <div className="warning">
+          LAN configurata ma non ancora attiva. Avvia (o riavvia) il server multisorgente.
+        </div>}
+        <Field label="Fixed MCP Bearer Token (stored encrypted)" hint="Used by the managed server. Save once and it stays unchanged across restarts. If empty on the first Save, the Windows MCP_BEARER_TOKEN is reused when available; otherwise a secure token is generated. OpenCode must use the same token.">
+          <input type="password" autoComplete="new-password" value={settings.mcp.bearerToken} onChange={e => set('mcp', 'bearerToken', e.target.value)}
+            placeholder="Save once to generate a persistent token" />
+        </Field>
+        <div className="actions">
+          <button onClick={save} disabled={busy}>Save fixed Bearer Token</button>
+          <button onClick={() => navigator.clipboard.writeText(settings.mcp.bearerToken)}
+            disabled={!settings.mcp.bearerToken}>Copy Bearer Token</button>
+        </div>
         <details className="advanced">
           <summary>Advanced</summary>
           <Check checked={settings.mcp.jsonResponses} onChange={v => set('mcp', 'jsonResponses', v)} label="Answer with application/json instead of an SSE stream (expected by most remote MCP clients)" />

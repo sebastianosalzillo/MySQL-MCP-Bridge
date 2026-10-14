@@ -1,0 +1,29 @@
+{
+  "mysql": {
+    "host": "127.0.0.1",
+    "port": 3306,
+    "database": "example_db",
+    "user": "mcp_readonly",
+    "password": "${MCP_MYSQL_PASSWORD}",
+    "collation": "utf8mb4",
+    "tlsMode": "off",
+    "allowTlsFallback": false
+  },
+  "mcp": {
+    "port": 3001,
+    "accessMode": "read",
+    "bearerToken": "${MCP_BEARER_TOKEN}",
+    "allowedTables": [],
+    "selectLimit": 1000,
+    "queryTimeoutMs": 30000,
+    "blockMultipleStatements": true,
+    "blockFileAccess": true,
+    "allowSlowFunctions": false,
+    "enableExecuteSql": false,
+    "jsonResponses": true
+  },
+  "ngrok": {
+    "enabled": false,
+    "domain": ""
+  }
+}

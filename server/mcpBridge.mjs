@@ -9,6 +9,7 @@ import { ApprovalManager } from './approvalManager.mjs';
 import { registerTools } from './tools.mjs';
 import { compatibilityWarnings, describeVersion } from './mysqlVersion.mjs';
 import { validateFreeSql } from './security.mjs';
+import { mcpAllowedConnections, validMcpRequestHeaders } from './mcpSecurity.mjs';
 
 export { testConnection as testMySql };
 
@@ -33,6 +34,10 @@ function isLoopback(req) {
 }
 
 export async function startBridge(settings, hooks = {}) {
+  if (Array.isArray(settings.sources) && settings.sources.length) {
+    const { startMultiBridge } = await import('./multiBridge.mjs');
+    return startMultiBridge(settings, hooks);
+  }
   const log = makeLogger(hooks.onLog);
   const approvals = new ApprovalManager(hooks.onApproval);
   let listener = null;
@@ -116,9 +121,15 @@ export async function startBridge(settings, hooks = {}) {
       }
 
       // Resolved per request because the tunnel host is only known once ngrok is up.
-      const allowedHosts = buildAllowedHosts(settings, publicBase);
-      const allowedOrigins = buildAllowedOrigins(settings, publicBase);
+      const { allowedHosts, allowedOrigins } = mcpAllowedConnections({
+        port, publicBase,
+        hosts: settings.mcp?.allowedHosts || [],
+        origins: settings.mcp?.allowedOrigins || []
+      });
 
+      if (!validMcpRequestHeaders(req, { allowedHosts, allowedOrigins })) {
+        return res.status(403).json({ error: 'Forbidden: invalid Host or Origin header.' });
+      }
       const server = new McpServer(SERVER_INFO, { capabilities: { logging: {} } });
       registerTools(server, { pool, settings, approvals, log, capabilities, serverVersion, tlsMode });
 
@@ -213,30 +224,6 @@ export async function startBridge(settings, hooks = {}) {
     log('error', { message: `Startup failed: ${err?.message || String(err)}` });
     throw err;
   }
-}
-
-/**
- * The MCP endpoint can be published publicly through a tunnel, so the Host and
- * Origin headers are pinned to the local interface plus the live tunnel domain.
- */
-function buildAllowedHosts(settings, publicBase) {
-  const hosts = new Set(['127.0.0.1', 'localhost', '[::1]']);
-  for (const extra of settings.mcp?.allowedHosts || []) {
-    if (extra) hosts.add(String(extra));
-  }
-  if (publicBase) {
-    try { hosts.add(new URL(publicBase).host); } catch { /* ignore malformed tunnel url */ }
-  }
-  return [...hosts];
-}
-
-function buildAllowedOrigins(settings, publicBase) {
-  const origins = new Set(['http://127.0.0.1', 'http://localhost']);
-  for (const extra of settings.mcp?.allowedOrigins || []) {
-    if (extra) origins.add(String(extra));
-  }
-  if (publicBase) origins.add(publicBase);
-  return [...origins];
 }
 
 export async function runLocalSql(settings, sql) {
