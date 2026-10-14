@@ -53,7 +53,8 @@ const defaultSettings = {
     jsonResponses: true,
     allowedHosts: [],
     allowedOrigins: [],
-    bearerToken: ''
+    bearerToken: '',
+    lan: { enabled: false, host: '' }
   },
   ngrok: {
     enabled: true,
@@ -160,6 +161,10 @@ function exportSourceSettings(settings) {
     mcp: {
       port: Number(settings.mcp?.port || 3001), accessMode: 'read',
       bearerToken: String.fromCharCode(36) + '{MCP_BEARER_TOKEN}',
+      lan: {
+        enabled: settings.mcp?.lan?.enabled === true,
+        host: settings.mcp?.lan?.enabled === true ? String(settings.mcp.lan.host || '') : ''
+      },
       selectLimit: Math.min(5000, Math.max(1, Number(settings.mcp?.selectLimit || 200))),
       queryTimeoutMs: Number(settings.mcp?.queryTimeoutMs || 30000),
       blockMultipleStatements: true, blockFileAccess: true,
@@ -342,6 +347,13 @@ function managedStatus() {
 }
 
 ipcMain.handle('standalone:managed-status', () => managedStatus());
+
+ipcMain.handle('standalone:lan-interfaces', async () => {
+  const { availableLanInterfaces } = await import(
+    pathToFileURL(path.join(__dirname, '..', 'server', 'lanNetwork.mjs')).href
+  );
+  return availableLanInterfaces();
+});
 
 ipcMain.handle('standalone:managed-start', async (_event, settings) => {
   if (managedStandalone) return managedStatus();

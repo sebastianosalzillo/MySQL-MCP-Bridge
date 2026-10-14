@@ -16,7 +16,7 @@ const empty = {
     allowSlowFunctions: false, requireWhereForUpdateDelete: true,
     confirmUpdate: true, confirmDelete: true, confirmDdl: true,
     enableExecuteSql: false, jsonResponses: true, allowedHosts: [],
-    allowedOrigins: [], bearerToken: ''
+    allowedOrigins: [], bearerToken: '', lan: { enabled: false, host: '' }
   },
   ngrok: { enabled: true, authtoken: '', domain: '' },
   sources: []
@@ -66,6 +66,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [standaloneStatus, setStandaloneStatus] = useState(null);
   const [managed, setManaged] = useState({ running: false });
+  const [lanInterfaces, setLanInterfaces] = useState([]);
   const [exportInfo, setExportInfo] = useState(null);
   const [aiPort, setAiPort] = useState(3002);
   const [aiToken, setAiToken] = useState('');
@@ -81,6 +82,7 @@ export default function App() {
   useEffect(() => {
     api.getSettings().then(setSettings);
     api.managedStandaloneStatus().then(setManaged);
+    api.listLanInterfaces().then(setLanInterfaces).catch(() => setLanInterfaces([]));
     api.managedAdminAccess().then(access => { if (access.token) { setAiToken(access.token); setAiPort(access.port); } });
     api.getStatus().then(setStatus);
     api.listApprovals().then(setApprovals);
@@ -100,6 +102,18 @@ export default function App() {
   }, []);
 
   const set = (section, key, value) => setSettings(prev => ({ ...prev, [section]: { ...prev[section], [key]: value } }));
+  const setLan = (field, value) => setSettings(prev => ({
+    ...prev,
+    mcp: {
+      ...prev.mcp,
+      lan: {
+        enabled: false, host: '', ...(prev.mcp.lan || {}),
+        [field]: value,
+        ...(field === 'enabled' && value && !prev.mcp.lan?.host
+          ? { host: lanInterfaces[0]?.address || '' } : {})
+      }
+    }
+  }));
 
 
   const addSource = type => setSettings(prev => ({
@@ -419,6 +433,7 @@ export default function App() {
         <div className="statusbox">
           <Row label="Electron-managed MCP" value={managed.running ? 'ONLINE' : 'OFFLINE'} />
           <Row label="Endpoint" value={managed.mcpUrl || 'http://127.0.0.1:' + settings.mcp.port + '/mcp'} copy />
+          {managed.lanEnabled && <Row label="LAN endpoint" value={managed.lanUrl} copy />}
           <Row label="Mode" value="READ ONLY" />
         </div>
         {(settings.sources || []).map((p, i) => <div className="panel" key={i}>
@@ -556,6 +571,32 @@ export default function App() {
           <Field label="Fixed ngrok domain"><input value={settings.ngrok.domain} onChange={e => set('ngrok', 'domain', e.target.value)} placeholder="example.ngrok-free.app (optional)" /></Field>
         </div>
         <Check checked={settings.ngrok.enabled} onChange={v => set('ngrok', 'enabled', v)} label="Publish the MCP endpoint through ngrok" />
+        <h3>Accesso dalla rete locale (solo server READ ONLY)</h3>
+        <Check checked={settings.mcp.lan?.enabled === true}
+          onChange={value => setLan('enabled', value)}
+          label="Consenti accesso dalla rete locale (LAN)" />
+        <Field label="Indirizzo IP della scheda di rete del PC"
+          hint="Seleziona la rete privata a cui sono collegati gli altri PC. Localhost rimane sempre disponibile.">
+          <Select value={settings.mcp.lan?.host || ''} onChange={value => setLan('host', value)}
+            options={[['', 'Seleziona una scheda di rete'], ...lanInterfaces.map(n => [
+              n.address, n.name + ' — ' + n.address + ' / ' + n.netmask
+            ])]} />
+        </Field>
+        <div className="actions">
+          <button disabled={busy} onClick={async () => {
+            try { setLanInterfaces(await api.listLanInterfaces()); }
+            catch (error) { setNotice('Network interfaces: ' + error.message); }
+          }}>Aggiorna IP disponibili</button>
+          <button disabled={busy} onClick={save}>Salva impostazioni LAN</button>
+        </div>
+        <p className="hint">Questa opzione vale soltanto per il server multisorgente in Standalone Sources → Save &amp; start MCP. Dopo una modifica, arresta e riavvia il server per applicarla. Richiede il Bearer Token; l'interfaccia AI amministrativa resta su 127.0.0.1:3002. Il firewall Windows potrebbe richiedere una regola sulla porta locale TCP.</p>
+        {managed.lanEnabled && <div className="statusbox">
+          <Row label="Indirizzo MCP sulla LAN" value={managed.lanUrl || '—'} copy />
+          <Row label="Sicurezza" value="READ ONLY + Bearer Token + subnet locale" />
+        </div>}
+        {settings.mcp.lan?.enabled && !managed.lanEnabled && <div className="warning">
+          LAN configurata ma non ancora attiva. Avvia (o riavvia) il server multisorgente.
+        </div>}
         <Field label="Fixed MCP Bearer Token (stored encrypted)" hint="Used by the managed server. Save once and it stays unchanged across restarts. If empty on the first Save, the Windows MCP_BEARER_TOKEN is reused when available; otherwise a secure token is generated. OpenCode must use the same token.">
           <input type="password" autoComplete="new-password" value={settings.mcp.bearerToken} onChange={e => set('mcp', 'bearerToken', e.target.value)}
             placeholder="Save once to generate a persistent token" />

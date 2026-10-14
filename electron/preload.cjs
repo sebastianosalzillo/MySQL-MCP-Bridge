@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('bridgeAPI', {
   startManagedStandalone: settings => ipcRenderer.invoke('standalone:managed-start', settings),
   stopManagedStandalone: () => ipcRenderer.invoke('standalone:managed-stop'),
   managedStandaloneStatus: () => ipcRenderer.invoke('standalone:managed-status'),
+  listLanInterfaces: () => ipcRenderer.invoke('standalone:lan-interfaces'),
   managedAdminAccess: () => ipcRenderer.invoke('standalone:admin-access'),
   onManagedStatus: callback => {
     const handler = (_event, payload) => callback(payload);
