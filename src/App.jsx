@@ -588,6 +588,22 @@ export default function App() {
             catch (error) { setNotice('Network interfaces: ' + error.message); }
           }}>Aggiorna IP disponibili</button>
           <button disabled={busy} onClick={save}>Salva impostazioni LAN</button>
+          <button disabled={busy || !lanInterfaces.some(n => n.address === settings.mcp.lan?.host)}
+            onClick={async () => {
+              const address = settings.mcp.lan?.host;
+              const port = Number(settings.mcp.port);
+              if (!Number.isInteger(port) || port < 1 || port > 65535) {
+                setNotice('Imposta una porta MCP valida prima di copiare il comando firewall.');
+                return;
+              }
+              const command = 'New-NetFirewallRule -DisplayName "MySQL MCP Bridge LAN ' + port +
+                '" -Direction Inbound -Action Allow -Protocol TCP -LocalAddress ' + address +
+                ' -LocalPort ' + port + ' -RemoteAddress LocalSubnet -Profile Private';
+              try {
+                await navigator.clipboard.writeText(command);
+                setNotice('Comando firewall copiato: eseguilo in PowerShell come amministratore sul PC host soltanto se necessario.');
+              } catch (error) { setNotice('Copia del comando firewall fallita: ' + error.message); }
+            }}>Copia comando Windows Firewall</button>
         </div>
         <p className="hint">Questa opzione vale soltanto per il server multisorgente in Standalone Sources → Save &amp; start MCP. Dopo una modifica, arresta e riavvia il server per applicarla. Richiede il Bearer Token; l'interfaccia AI amministrativa resta su 127.0.0.1:3002. Il firewall Windows potrebbe richiedere una regola sulla porta locale TCP.</p>
         {managed.lanEnabled && <div className="statusbox">

@@ -302,6 +302,10 @@ MIT.
 
 Passwords, bearer tokens and the AI scheduler admin token are encrypted with Electron safeStorage (Windows DPAPI) in the current user's app data directory. They are **not** written in plaintext to standalone.json. The export button continues to emit only environment placeholders for separately managed external services. The Electron-managed server uses READ ONLY tools and ngrok OFF. It stops when Electron closes, so use the separately managed standalone/Windows service if it must run while Electron is closed. When port 3001 is already taken by the old standalone server, stop that process before starting the managed server.
 
+## Optional access from other PCs on the LAN
+
+In Electron choose **MCP + ngrok → Consenti accesso dalla rete locale (LAN)** and the private IP of your network adapter. The read-only multi-source server binds a second listener to that IP, requires the fixed Bearer Token and refuses clients outside its subnet. Local OpenCode remains available at 127.0.0.1. See [LAN setup and firewall instructions](docs/lan-access.md).
+
 ## Read-only shared folders and documents
 
 Electron can authorize Windows network shares and local folders for MCP browsing, searching and reading PDF, Word DOCX and Excel XLSX. See [the shared-folders guide](docs/readonly-file-sources.md) for setup, limits and commands.
