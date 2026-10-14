@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { selectedLanInterface } from './lanNetwork.mjs';
 
 const ENV_REFERENCE = /\$\{([A-Z][A-Z0-9_]*)\}/g;
 
@@ -60,6 +61,14 @@ export function validateStandaloneSettings(settings) {
   if (settings.mcp.blockMultipleStatements === false || settings.mcp.blockFileAccess === false || settings.mcp.allowSlowFunctions === true) {
     throw new Error('Unsafe SQL guardrail settings are not permitted in standalone mode.');
   }
+  if (settings.mcp?.lan?.enabled === true) {
+    // Fail closed: a user cannot use LAN without a strong auth token and
+    // an explicitly selected currently-active private network adapter.
+    if (String(settings.mcp.bearerToken || '').length < 24) {
+      throw new Error('LAN access requires a fixed Bearer Token of at least 24 characters.');
+    }
+    selectedLanInterface(settings.mcp.lan);
+  }
   if (settings.ngrok?.enabled && !settings.mcp.bearerToken) {
     throw new Error('A non-empty mcp.bearerToken is required when ngrok is enabled.');
   }
@@ -91,6 +100,10 @@ export function validateStandaloneSettings(settings) {
     mcp: {
       ...settings.mcp,
       accessMode: 'read',
+      lan: {
+        enabled: settings.mcp?.lan?.enabled === true,
+        host: settings.mcp?.lan?.enabled === true ? settings.mcp.lan.host : ''
+      },
       blockMultipleStatements: true,
       blockFileAccess: true,
       allowSlowFunctions: false,

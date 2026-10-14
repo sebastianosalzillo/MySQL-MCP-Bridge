@@ -17,7 +17,8 @@ export function managedStandaloneSettings(exported, stored, adminToken, stateDir
   return validateStandaloneSettings({
     ...exported,
     sources,
-    mcp: { ...exported.mcp, bearerToken: stored.mcp.bearerToken },
+    mcp: { ...exported.mcp, bearerToken: stored.mcp.bearerToken,
+      lan: { enabled: stored.mcp?.lan?.enabled === true, host: stored.mcp?.lan?.host || '' } },
     automation: { ...exported.automation, adminToken, stateDir },
     ngrok: { enabled: false }
   });
